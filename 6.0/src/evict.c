@@ -41,7 +41,7 @@
 /* To improve the quality of the LRU approximation we take a set of keys
  * that are good candidate for eviction across freeMemoryIfNeeded() calls.
  *
- * Entries inside the eviciton pool are taken ordered by idle time, putting
+ * Entries inside the eviction pool are taken ordered by idle time, putting
  * greater idle times to the right (ascending order).
  *
  * When an LFU policy is used instead, a reverse frequency indication is used
@@ -194,9 +194,6 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
              * first. So inside the pool we put objects using the inverted
              * frequency subtracting the actual frequency to the maximum
              * frequency of 255. */
-            // LRU 算法中，key 按照 idle 降序排列，要淘汰时，取 idle 最大的。
-            // 但是 LFU 算法中，要淘汰访问频率低的，所以跟 LFU 是相反的，
-            // 因此，为了适应以前的 LRU 算法，idle 取值为 255 减去 key 访问频率
             idle = 255-LFUDecrAndReturn(o);
         } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
             /* In this case the sooner the expire the better. */
@@ -245,7 +242,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
         /* Try to reuse the cached SDS string allocated in the pool entry,
          * because allocating and deallocating this object is costly
          * (according to the profiler, not my fantasy. Remember:
-         * premature optimizbla bla bla bla. */
+         * premature optimization bla bla bla. */
         int klen = sdslen(key);
         if (klen > EVPOOL_CACHED_SDS_SIZE) {
             pool[k].key = sdsdup(key);
@@ -264,7 +261,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
 
  * We have 24 total bits of space in each object in order to implement
  * an LFU (Least Frequently Used) eviction policy, since we re-use the
- * LRU field for this purpose. // 复用 LRU 成员变量
+ * LRU field for this purpose.
  *
  * We split the 24 bits into two fields:
  *
@@ -272,14 +269,11 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
  *     +----------------+--------+
  *     + Last decr time | LOG_C  |
  *     +----------------+--------+
- * LOG_C is a logarithmic counter that provides an indication of the access
- * frequency.
- * LOG_C 是一个对数计数器，表示访问频率。
  *
- * However this field must also be decremented otherwise what used
+ * LOG_C is a logarithmic counter that provides an indication of the access
+ * frequency. However this field must also be decremented otherwise what used
  * to be a frequently accessed key in the past, will remain ranked like that
  * forever, while we want the algorithm to adapt to access pattern changes.
- * 但是这个变量必须是递减的，否则过去经常被访问的 key 将一直保持排名不变，而我们想要该算法适应访问模式的变化。
  *
  * So the remaining 16 bits are used in order to store the "decrement time",
  * a reduced-precision Unix time (we take 16 bits of the time converted
@@ -287,40 +281,29 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
  * counter is halved if it has an high value, or just decremented if it
  * has a low value.
  *
- * 因此，剩余的 16 位用来保存递减次数（decrement time)，使用一个降低了精度的 Unix 时间，
- * 我们从转换为分钟的时间中取 16 位，并且我们不担心时间溢出。
- * 如果 LOG_C 计数器是个很高的值，那么将其值折半，否则仅做递减。
- *
  * New keys don't start at zero, in order to have the ability to collect
  * some accesses before being trashed away, so they start at COUNTER_INIT_VAL.
  * The logarithmic increment performed on LOG_C takes care of COUNTER_INIT_VAL
  * when incrementing the key, so that keys starting at COUNTER_INIT_VAL
  * (or having a smaller value) have a very high chance of being incremented
  * on access.
- * 新 key 为了在被丢弃之前采集一些访问信息，值从 COUNTER_INIT_VAL 开始，而非 0。
- * 递增 key 时，LOG_C 会基于 COUNTER_INIT_VAL 执行对数增长，
- * 因此以 COUNTER_INIT_VAL（或具有较小值）开始，使 key 很有可能在访问时递增。
- *
  *
  * During decrement, the value of the logarithmic counter is halved if
  * its current value is greater than two times the COUNTER_INIT_VAL, otherwise
  * it is just decremented by one.
- * 在递减期间，如果对数计数器的值大于 2 倍的 COUNTER_INIT_VAL 会做折半处理，否则仅仅是递减。
  * --------------------------------------------------------------------------*/
 
 /* Return the current time in minutes, just taking the least significant
  * 16 bits. The returned time is suitable to be stored as LDT (last decrement
  * time) for the LFU implementation. */
 unsigned long LFUGetTimeInMinutes(void) {
-    return (server.unixtime/60) & 65535;// 秒级时间，取低 16 位
+    return (server.unixtime/60) & 65535;
 }
 
 /* Given an object last access time, compute the minimum number of minutes
  * that elapsed since the last access. Handle overflow (ldt greater than
  * the current 16 bits minutes time) considering the time as wrapping
  * exactly once. */
-// 给一个对象上次访问时间，计算距离上一次访问，至少过去了多长时间（分钟）。
-// 主要处理时间溢出。
 unsigned long LFUTimeElapsed(unsigned long ldt) {
     unsigned long now = LFUGetTimeInMinutes();
     if (now >= ldt) return now-ldt;
@@ -329,11 +312,9 @@ unsigned long LFUTimeElapsed(unsigned long ldt) {
 
 /* Logarithmically increment a counter. The greater is the current counter value
  * the less likely is that it gets really implemented. Saturate it at 255. */
-// 一个计数器的对数增长，当前值越大，越不容易增长，最终收敛于 255（8 bit）
-// counter越大，其增加的概率越小，8 bits也足够记录很高的访问频率
 uint8_t LFULogIncr(uint8_t counter) {
     if (counter == 255) return 255;
-    double r = (double)rand()/RAND_MAX; // 0 ~ 1 之间的随机数
+    double r = (double)rand()/RAND_MAX;
     double baseval = counter - LFU_INIT_VAL;
     if (baseval < 0) baseval = 0;
     double p = 1.0/(baseval*server.lfu_log_factor+1);
@@ -347,8 +328,6 @@ uint8_t LFULogIncr(uint8_t counter) {
  * And we will times halve the counter according to the times of
  * elapsed time than server.lfu_decay_time.
  * Return the object frequency counter.
- * 如果一个对象的衰减时间到了，衰减 LFU 计数器，但不更新对象中的 LFU 变量。
- * 我们在对象被真正访问时，以明确的方式更新访问时间和计数器。
  *
  * This function is used in order to scan the dataset for the best object
  * to fit: as we check for the candidate, we incrementally decrement the
@@ -356,17 +335,14 @@ uint8_t LFULogIncr(uint8_t counter) {
 unsigned long LFUDecrAndReturn(robj *o) {
     unsigned long ldt = o->lru >> 8;
     unsigned long counter = o->lru & 255;
-    // 如果设置了衰减因子，使用距离上一次访问过去的时间与衰减周期的比值，也就是过了几个衰减周期，否则设置为 0
-    // 默认为 1 的情况下，也就是 N 分钟内没有访问，counter 就要减 N。
     unsigned long num_periods = server.lfu_decay_time ? LFUTimeElapsed(ldt) / server.lfu_decay_time : 0;
-    if (num_periods) // 衰减时间的 n 个周期
-        // 越久没访问的 key，counter 衰减越大，甚至变为 0
+    if (num_periods)
         counter = (num_periods > counter) ? 0 : counter - num_periods;
     return counter;
 }
 
 /* ----------------------------------------------------------------------------
- * The external API for eviction: freeMemroyIfNeeded() is called by the
+ * The external API for eviction: freeMemoryIfNeeded() is called by the
  * server when there is data to add in order to make space if needed.
  * --------------------------------------------------------------------------*/
 
@@ -465,7 +441,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  *
  * The function returns C_OK if we are under the memory limit or if we
  * were over the limit, but the attempt to free memory was successful.
- * Otehrwise if we are over the memory limit, but not enough memory
+ * Otherwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(void) {
     int keys_freed = 0;

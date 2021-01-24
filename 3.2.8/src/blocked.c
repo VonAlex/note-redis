@@ -97,6 +97,8 @@ int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int 
 /* Block a client for the specific operation type. Once the CLIENT_BLOCKED
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
+// 以指定类型阻塞 client。一旦 client 设置了 CLIENT_BLOCKED 标识，
+// client uery buffer 将会一直累积，不会处理，直到 client 解阻塞。
 void blockClient(client *c, int btype) {
     c->flags |= CLIENT_BLOCKED;
     c->btype = btype;

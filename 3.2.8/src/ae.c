@@ -78,7 +78,6 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     if (aeApiCreate(eventLoop) == -1) goto err; // apidata 的赋值，包含新建 epfd 和 events 表
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
-    // 初始化监听的事件类型为空
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
     return eventLoop;
@@ -210,7 +209,7 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
 
     te = zmalloc(sizeof(*te));
     if (te == NULL) return AE_ERR;
-    te->id = id;
+    te->id = id; // time event 的 id
     aeAddMillisecondsToNow(milliseconds,&te->when_sec,&te->when_ms);
     te->timeProc = proc;
     te->finalizerProc = finalizerProc;
@@ -284,7 +283,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
      * events to be processed ASAP when this happens: the idea is that
      * processing events earlier is less dangerous than delaying them
      * indefinitely, and practice suggests it is. */
-    // 时间混乱了，现在的时间比上一次处理时间事件的时间还下小？把各个时间事件的 when_sec 置为 0
+    // 时间混乱了，现在的时间比上一次处理时间事件的时间还小？把各个时间事件的 when_sec 置为 0
     if (now < eventLoop->lastTime) {
         te = eventLoop->timeEventHead;
         while(te) {
@@ -296,7 +295,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     eventLoop->lastTime = now;
 
     prev = NULL;
-    te = eventLoop->timeEventHead; // 获得时间事件链的第一个元素
+    te = eventLoop->timeEventHead; // 获得时间事件链的第一个
     maxId = eventLoop->timeEventNextId-1; // 当前时间事件表中的最大ID, head 的 id 最大
     // 再次遍历时间事件链表
     while(te) {
@@ -326,6 +325,8 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             te = te->next;
             continue;
         }
+
+        
         aeGetTime(&now_sec, &now_ms);
         if (now_sec > te->when_sec ||
             (now_sec == te->when_sec && now_ms >= te->when_ms))
@@ -335,7 +336,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             id = te->id;
             retval = te->timeProc(eventLoop, id, te->clientData);
             processed++;
-            if (retval != AE_NOMORE) {
+            if (retval != AE_NOMORE) { // 非零返回值表示这是一个周期时间时间，重新计算下一次的到期时间
                 aeAddMillisecondsToNow(retval,&te->when_sec,&te->when_ms);
             } else {
                 te->id = AE_DELETED_EVENT_ID;
@@ -365,13 +366,12 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * 函数返回执行的事件个数
  * */
 // 如果发生了文件事件，就会优先处理文件事件，否则就会一直等待，直到最近的时间事件需要触发
-// flag 为事件类型
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
     int processed = 0, numevents;
 
     /* Nothing to do? return ASAP */
-    if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0; // 没什么可做的，立即返回
+    if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
 
     /* Note that we want call select() even if there are no
      * file events to process as long as we want to process time

@@ -33,14 +33,14 @@
 
 typedef struct aeApiState {
     int epfd;
-    struct epoll_event *events;
+    struct epoll_event *events; // 用于返回已就绪的 event
 } aeApiState;
 
 // 创建一个 epoll 实例，获得 epfd，保存结果到 eventLoop 中
 static int aeApiCreate(aeEventLoop *eventLoop) {
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
-    if (!state) return -1;
+    if (!state) return -1; // 内存分配出错
     state->events = zmalloc(sizeof(struct epoll_event)*eventLoop->setsize);
     if (!state->events) {
         zfree(state);
@@ -107,7 +107,7 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
 }
 
 static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
-    aeApiState *state = eventLoop->apidata; // 这里的 aeApiState 为 aeApiCreate 时创建的
+    aeApiState *state = eventLoop->apidata; 
     int retval, numevents = 0;
 
     retval = epoll_wait(state->epfd,state->events,eventLoop->setsize,
@@ -116,8 +116,6 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
         int j;
 
         numevents = retval;
-
-        // 遍历产生的事件，加入 eventLoop->fired 数组
         for (j = 0; j < numevents; j++) {
             int mask = 0;
             struct epoll_event *e = state->events+j;

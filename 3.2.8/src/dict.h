@@ -76,7 +76,7 @@ typedef struct dictht {
 typedef struct dict {
     dictType *type;   // 类型特定函数，dictType 结构中包含自定义的函数，这些函数使得key和value能够存储任何类型的数据
     void *privdata;  // 私有数据，保存着 dictType 结构中函数的参数
-    dictht ht[2];  // 哈希表，2个,一般只用 ht[0],ht[1]在 rehash 的时候用到
+    dictht ht[2];  // 哈希表，2个,一般只用 ht[0], ht[1]在 rehash 的时候用到
     long rehashidx; /* rehashing not in progress if rehashidx == -1 标志 rehash 进度，没有的话为 -1 */
     int iterators; /* number of iterators currently running */
 } dict;

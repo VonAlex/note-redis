@@ -132,45 +132,64 @@ client *createClient(int fd) {
 
 /* This function is called every time we are going to transmit new data
  * to the client. The behavior is the following:
+ * 该函数在每次我们要给 client 发送数据时调用
  *
  * If the client should receive new data (normal clients will) the function
  * returns C_OK, and make sure to install the write handler in our event
  * loop so that when the socket is writable new data gets written.
+ * 如果 client 应当收到新数据（ 正常 client ），该函数返回 C_OK。
+ * 确保在 eventloop 中注册写处理函数，当 socket 可写时，新数据可以写入。
  *
  * If the client should not receive new data, because it is a fake client
  * (used to load AOF in memory), a master or because the setup of the write
  * handler failed, the function returns C_ERR.
- *
+ * 如果 client 不应该接收新数据，因为它是一个假的 client（ 在内存中 load aof 时使用 ）
+ * 一个 master 或者由于注册写处理函数失败，该函数返回 C_ERR。
+ * 
  * The function may return C_OK without actually installing the write
  * event handler in the following cases:
+ * 本函数也可以在不注册写事件处理函数的情况下返回 C_OK，仅以下情况可能发生：
  *
  * 1) The event handler should already be installed since the output buffer
  *    already contained something.
+ * 由于输出缓冲区中已有数据，这个事件已经被注册
+ * 
  * 2) The client is a slave but not yet online, so we want to just accumulate
  *    writes in the buffer but not actually sending them yet.
+ * client 是一个 slave，且未上线，所以我们只是想在 buffer 中累计数据，实际上不发送。
  *
  * Typically gets called every time a reply is built, before adding more
  * data to the clients output buffers. If the function returns C_ERR no
- * data should be appended to the output buffers. */
+ * data should be appended to the output buffers. 
+ * 通常，每次构建 reply 时，都会在往 client 输出缓冲区中添加更多数据之前调用，
+ * 该函数如果返回 C_ERR，那么将不会有数据加到输出缓冲区。
+ * */
 int prepareClientToWrite(client *c) {
     /* If it's the Lua client we always return ok without installing any
      * handler since there is no socket at all. */
+    // 因为 lua client 根本没有 socket，所以不会注册事件，总是返回 ok
     if (c->flags & CLIENT_LUA) return C_OK;
 
     /* CLIENT REPLY OFF / SKIP handling: don't send replies. */
+    // 某些标识的 client，不要发送 reply
     if (c->flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
 
     /* Masters don't receive replies, unless CLIENT_MASTER_FORCE_REPLY flag
      * is set. */
+    // master 不接收 reply，除非带有 CLIENT_MASTER_FORCE_REPLY 标识
     if ((c->flags & CLIENT_MASTER) &&
         !(c->flags & CLIENT_MASTER_FORCE_REPLY)) return C_ERR;
 
+    // 假 client fd <= 0，不需要发送 reply
     if (c->fd <= 0) return C_ERR; /* Fake client for AOF loading. */
 
     /* Schedule the client to write the output buffers to the socket only
      * if not already done (there were no pending writes already and the client
      * was yet not flagged), and, for slaves, if the slave can actually
-     * receive writes at this stage. */
+     * receive writes at this stage. 
+     * 调度 client 将输入缓冲区到 socket，仅当此时没有 pending writes 或者 client 不带任何标识。
+     * 对于 slave，如果它的确可以在这个阶段接收 write
+     * */
     if (!clientHasPendingReplies(c) &&
         !(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
@@ -181,7 +200,12 @@ int prepareClientToWrite(client *c) {
          * to write to the socket. This way before re-entering the event
          * loop, we can try to directly write to the client sockets avoiding
          * a system call. We'll only really install the write handler if
-         * we'll not be able to write the whole reply at once. */
+         * we'll not be able to write the whole reply at once. 
+         * 这里仅仅把 client 做个标识，并把它放入 clients 列表中，这个列表中 client 都会有一些东西需要往 socket 写入，
+         * 而不会直接注册写时间处理函数。
+         * 在重新进入事件循环之前使用这种方式，我们可以尝试直接写入到 client socket，避免了系统调用。
+         * 如果我们不能一次写入所有的 reply，将注册写时间处理函数。
+         * */
         c->flags |= CLIENT_PENDING_WRITE;
         listAddNodeHead(server.clients_pending_write,c);
     }
@@ -523,7 +547,7 @@ void addReplyLongLong(client *c, long long ll) {
 }
 
 void addReplyMultiBulkLen(client *c, long length) {
-    if (length < OBJ_SHARED_BULKHDR_LEN)
+    if (length < OBJ_SHARED_BULKHDR_LEN) // 长度为 32
         addReply(c,shared.mbulkhdr[length]); // *length
     else
         addReplyLongLongWithPrefix(c,length,'*');
@@ -913,13 +937,15 @@ int writeToClient(int fd, client *c, int handler_installed) {
 
     while(clientHasPendingReplies(c)) {
         if (c->bufpos > 0) {
+            // 向 fd 里写入 c->bufpos-c->sentlen 个字节
             nwritten = write(fd,c->buf+c->sentlen,c->bufpos-c->sentlen);
             if (nwritten <= 0) break;
-            c->sentlen += nwritten;
-            totwritten += nwritten;
+            c->sentlen += nwritten; // 已发送的数据长度累计
+            totwritten += nwritten; // 总长度
 
             /* If the buffer was sent, set bufpos to zero to continue with
              * the remainder of the reply. */
+             // buffer 都发送完了
             if ((int)c->sentlen == c->bufpos) {
                 c->bufpos = 0;
                 c->sentlen = 0;
@@ -947,14 +973,21 @@ int writeToClient(int fd, client *c, int handler_installed) {
                 c->reply_bytes -= objmem;
             }
         }
-        /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
-         * bytes, in a single threaded server it's a good idea to serve
-         * other clients as well, even if a very large request comes from
-         * super fast link that is always able to accept data (in real world
+        /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT bytes, 
+         * 注意：最大发送的数据量为 NET_MAX_WRITES_PER_EVENT 个字节，即 64KB
+         *
+         * in a single threaded server it's a good idea to serve other clients as well, 
+         * even if a very large request comes from super fast link 
+         * that is always able to accept data (in real world
          * scenario think about 'KEYS *' against the loopback interface).
+         * 对于一个单线程服务，最好同时服务其他 client，即使来自于总是能够接受数据的超快链接的一个很大的请求。
+         * 现实场景下，考虑 KEYS * 命令
          *
          * However if we are over the maxmemory limit we ignore that and
-         * just deliver as much data as it is possible to deliver. */
+         * just deliver as much data as it is possible to deliver. 
+         * 然而，如果我们超出了 maxmemory 限制，我们应该忽略这个限制，而尽量提供多的数据，
+         * 即，尽快把数据发出去。
+         */
         server.stat_net_output_bytes += totwritten;
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (server.maxmemory == 0 ||
@@ -1000,12 +1033,16 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 /* This function is called just before entering the event loop, in the hope
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
- * get it called, and so forth. */
+ * get it called, and so forth. 
+ * 该函数仅仅在进入 eventloop 前调用，希望我们仅仅把 replies 写入 client 输出缓冲区，
+ * 而不必使用任何 syscall 来注册可写事件处理器，调用它，等等
+ * */
 int handleClientsWithPendingWrites(void) {
     listIter li;
     listNode *ln;
     int processed = listLength(server.clients_pending_write);
 
+    // 一次处理完所有等待回复的 client
     listRewind(server.clients_pending_write,&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
@@ -1013,10 +1050,13 @@ int handleClientsWithPendingWrites(void) {
         listDelNode(server.clients_pending_write,ln);
 
         /* Try to write buffers to the client socket. */
+
+        // 往 socket 写数据
         if (writeToClient(c->fd,c,0) == C_ERR) continue;
 
         /* If there is nothing left, do nothing. Otherwise install
          * the write handler. */
+        // 如果 没有写完，注册写事件进行处理
         if (clientHasPendingReplies(c) &&
             aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
                 sendReplyToClient, c) == AE_ERR)

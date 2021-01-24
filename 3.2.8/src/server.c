@@ -705,8 +705,13 @@ int incrementallyRehash(int dbid) {
  * to play well with copy-on-write (otherwise when a resize happens lots of
  * memory pages are copied). The goal of this function is to update the ability
  * for dict.c to resize the hash tables accordingly to the fact we have o not
- * running childs. */
+ * running childs. 
+ * 该函数会在一个后台进程终止时调用。
+ * 当有子进程时，为了更好的适应 COW 机制，应该避免 hash 表的 resize，否则会有大量的内存拷贝。
+ * 本函数的目标是根据是否有 child 来更新 dict.c 中 resize hash 的策略
+ * */
 void updateDictResizePolicy(void) {
+    // 没有后台进程，允许 hash 表的 resize
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
         dictEnableResize();
     else
@@ -973,7 +978,7 @@ long long getInstantaneousMetric(int metric) {
  * it gets called multiple times in a loop, so calling gettimeofday() for
  * each iteration would be costly without any actual gain. */
 int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
-    time_t now = now_ms/1000;
+    time_t now = now_ms/1000; // s
 
     if (server.maxidletime &&
         !(c->flags & CLIENT_SLAVE) &&    /* no timeout for slaves */
@@ -1606,7 +1611,7 @@ void initServerConfig(void) {
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.loading_process_events_interval_bytes = (1024*1024*2);
 
-    server.lruclock = getLRUClock(); // 24 位时间 (s)
+    server.lruclock = getLRUClock(); // 24 位时间戳 (s)
     resetServerSaveParams();  // 重置 save 条件
 
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change. 1 小时有 1 次改变 */
@@ -1950,7 +1955,7 @@ void resetServerStats(void) {
 void initServer(void) {
     int j;
 
-    // 忽略SIGHUP和SIGPIPE信号
+    // 忽略 SIGHUP 和 SIGPIPE 信号
     // https://blog.csdn.net/z_ryan/article/details/80952498
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -2672,8 +2677,8 @@ int processCommand(client *c) {
         call(c,CMD_CALL_FULL);
          // 保存写全局的复制偏移量
         c->woff = server.master_repl_offset;
-         // 如果因为 BLPOP 而阻塞的命令已经准备好，则处理client的阻塞状态
-         // 之前的阻塞会在下一次处理处理时进行检查
+
+        // 如果有因为 BLOP 阻塞的 key 已经准备好，处理相应的 client
         if (listLength(server.ready_keys))
             handleClientsBlockedOnLists();
     }
@@ -3624,7 +3629,7 @@ int freeMemoryIfNeeded(void) {
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
-    // 从 used memory 中刨去 slave 的 output buffers 和 AOF buffer
+    // 从 used memory 中去掉 slave 的 output buffers 和 AOF buffer
     mem_used = zmalloc_used_memory();
     if (slaves) {
         listIter li;

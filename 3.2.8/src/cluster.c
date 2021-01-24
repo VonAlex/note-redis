@@ -3233,29 +3233,26 @@ void clusterCron(void) {
 
     iteration++; /* Number of times this function was called so far. */
 
-    // 如果一个 handshake node 在 handshake timeout 时间内还没有变为正常 node，那么会从 nodes 中移除掉。
-    // 通常它的值为 NODE_TIMEOUT，但是当 NODE_TIMEOUT 太小（< 1s）时，我们把它设置成 1s
+    // 如果 node 握手在 handshake_timeout 时间内没有完成，那么就暂时先删掉它
     handshake_timeout = server.cluster_node_timeout;
+    // 通常它的值为 NODE_TIMEOUT，但是当 NODE_TIMEOUT 太小（< 1s）时，我们把它设置成 1s
     if (handshake_timeout < 1000) handshake_timeout = 1000;
 
     // 检查是否有 disconnected nodes 并且重新建立连接
     di = dictGetSafeIterator(server.cluster->nodes); // 遍历所有节点
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (node->flags & (CLUSTER_NODE_MYSELF|CLUSTER_NODE_NOADDR)) continue;  // 忽略掉 myself 和 noaddr 状态的节点
 
-        /*
-         * 处于 HANDSHAKE 状态的节点的生命周期等于配置文件中的 node timeout，即：
-         * 节点处于 handshake 状态，并且这个状态维持的时间超过 handshake_timeout，那么从本地 nodes map 中删掉它
-         *
-         * ctime 为 node 创建时的 mstime
-         */
+        // 忽略掉 myself 和 noaddr 状态的节点
+        if (node->flags & (CLUSTER_NODE_MYSELF|CLUSTER_NODE_NOADDR)) continue;  
+
+        // 握手超时了，从本地删掉
         if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
             clusterDelNode(node);
             continue;
         }
 
-        // A meet B的时候，link为NULL，B接收到MEET信息后，会创建clusterNode，这时候的clusterNode.link=NULL，这两种情况都走一下if，都满足条件
+        // A meet B 时，link 为NULL，B接收到MEET信息后，会创建clusterNode，这时候的clusterNode.link=NULL，这两种情况都走一下if，都满足条件
         // 或者集群中某个节点挂掉了，则会在这里反复的重连这个挂掉的节点，等待他再次连接到集群
         // 为未创建连接的节点创建连接，这样任何一个节点都会和集群中每一个clusterNode建立连接
         if (node->link == NULL) {

@@ -55,8 +55,10 @@
  * Note that even when dict_can_resize is set to 0, not all resizes are
  * prevented: a hash table is still allowed to grow if the ratio between
  * the number of elements and the buckets > dict_force_resize_ratio. */
-static int dict_can_resize = 1; // 表示 dict 是否启用rehash，dictEnableResize()和dictDisableResize()可以修改该变量
-static unsigned int dict_force_resize_ratio = 5;// 强制进行rehash的比例 used/size
+ // 注：即使 dict_can_resize 置为 0，也不是所有的 resize 都被阻止。
+ // 如果元素数与桶数量的比值超过 dict_force_resize_ratio，还是要强制做 resize 的
+static int dict_can_resize = 1; // 哈希表是否可以 rehash
+static unsigned int dict_force_resize_ratio = 5;// 强制进行 rehash 的比例 used/size
 
 /* -------------------------- private prototypes ---------------------------- */
 
@@ -68,7 +70,7 @@ static int _dictInit(dict *ht, dictType *type, void *privDataPtr);
 /* -------------------------- hash functions -------------------------------- */
 
 /* Thomas Wang's 32 bit Mix Function */
-// Thomas Wang 认为好的hash函数具有两个好的特点
+// Thomas Wang 认为好的 hash 函数具有两个好的特点
 // 1. hash 函数是可逆的。
 // 2. 具有雪崩效应，意思是，输入值 1 bit 位的变化会造成输出值 1/2 的 bit 位发生变化
 unsigned int dictIntHashFunction(unsigned int key)
@@ -200,7 +202,6 @@ int _dictInit(dict *d, dictType *type,
 
 /* Resize the table to the minimal size that contains all the elements,
  * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
- // 缩小 dict size 到 minimal，包含所有的元素
 int dictResize(dict *d)
 {
     int minimal;
@@ -208,7 +209,7 @@ int dictResize(dict *d)
     // 当 dict_can_resize = 0 或者 dict 正在做 rehash 时，返回出错标志 DICT_ERR
     if (!dict_can_resize || dictIsRehashing(d)) return DICT_ERR;
     minimal = d->ht[0].used;
-    if (minimal < DICT_HT_INITIAL_SIZE) // 大小小于 4 的话按照 4 来算
+    if (minimal < DICT_HT_INITIAL_SIZE) // 至少为 4
         minimal = DICT_HT_INITIAL_SIZE;
     return dictExpand(d, minimal); // 用 minimal 调整字典 d 的大小
 }
@@ -342,13 +343,16 @@ int dictRehashMilliseconds(dict *d, int ms) {
  *
  * This function is called by common lookup or update operations in the
  * dictionary so that the hash table automatically migrates from H1 to H2
- * while it is actively used. */
+ * while it is actively used. 
+ * 本函数仅进行一步 rehash，仅仅当没有安全迭代器绑定到 hash 表时。
+ * 当处于 rehash 过程的中间状态，即已有 iterators，我们不能弄乱两个哈希表，否则会弄丢key或覆盖 key
+ */
 static void _dictRehashStep(dict *d) {
-    if (d->iterators == 0) dictRehash(d,1);// 没有迭代器，进行1步rehash
+    if (d->iterators == 0) dictRehash(d,1);// 没有迭代器，进行 1 步rehash
 }
 
 /* Add an element to the target hash table */
-// 往目标 hash table 添加一个元素
+// 添加一个元素
 int dictAdd(dict *d, void *key, void *val)
 {
     dictEntry *entry = dictAddRaw(d,key);
@@ -361,19 +365,21 @@ int dictAdd(dict *d, void *key, void *val)
 /* Low level add. This function adds the entry but instead of setting
  * a value returns the dictEntry structure to the user, that will make
  * sure to fill the value field as he wishes.
+ * Low level add 接口。
+ * 本函数添加一个 entry，但没有设置 value，将 dictEntry 结构体返回给 user，
+ * 这将确保按需填充 value 字段
  *
  * This function is also directly exposed to the user API to be called
  * mainly in order to store non-pointers inside the hash value, example:
+ * 本函数也直接暴露给要调用的 user API，主要是为了将 non-pointers 存储在 hash 值内
  *
  * entry = dictAddRaw(dict,mykey);
  * if (entry != NULL) dictSetSignedIntegerVal(entry,1000);
  *
  * Return values:
  *
- * If key already exists NULL is returned.
- * If key was added, the hash entry is returned to be manipulated by the caller.
- * 如果 key 已经存在，返回 NULL。
- * 否则把新加的 hash entry 返回给调用者
+ * If key already exists NULL is returned. 如果 key 已经存在，返回 NULL。
+ * If key was added, the hash entry is returned to be manipulated by the caller. 否则把新加的 hash entry 返回给调用者
  */
 dictEntry *dictAddRaw(dict *d, void *key)
 {

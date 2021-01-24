@@ -166,6 +166,25 @@ sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     return sdsnewlen(hex,HASH_PASSWORD_LEN);
 }
 
+/* Given a hash and the hash length, returns C_OK if it is a valid password 
+ * hash, or C_ERR otherwise. */
+int ACLCheckPasswordHash(unsigned char *hash, int hashlen) {
+    if (hashlen != HASH_PASSWORD_LEN) {
+        return C_ERR;      
+    }
+ 
+    /* Password hashes can only be characters that represent
+     * hexadecimal values, which are numbers and lowercase 
+     * characters 'a' through 'f'. */
+    for(int i = 0; i < HASH_PASSWORD_LEN; i++) {
+        char c = hash[i];
+        if ((c < 'a' || c > 'f') && (c < '0' || c > '9')) {
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 /* =============================================================================
  * Low level ACL API
  * ==========================================================================*/
@@ -270,7 +289,7 @@ void ACLFreeUserAndKillClients(user *u) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
         if (c->user == u) {
-            /* We'll free the conenction asynchronously, so
+            /* We'll free the connection asynchronously, so
              * in theory to set a different user is not needed.
              * However if there are bugs in Redis, soon or later
              * this may result in some security hole: it's much
@@ -278,7 +297,13 @@ void ACLFreeUserAndKillClients(user *u) {
              * it in non authenticated mode. */
             c->user = DefaultUser;
             c->authenticated = 0;
-            freeClientAsync(c);
+            /* We will write replies to this client later, so we can't
+             * close it directly even if async. */
+            if (c == server.current_client) {
+                c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+            } else {
+                freeClientAsync(c);
+            }
         }
     }
     ACLFreeUser(u);
@@ -356,12 +381,13 @@ int ACLUserCanExecuteFutureCommands(user *u) {
  * to skip the command bit explicit test. */
 void ACLSetUserCommandBit(user *u, unsigned long id, int value) {
     uint64_t word, bit;
-    if (value == 0) u->flags &= ~USER_FLAG_ALLCOMMANDS;
     if (ACLGetCommandBitCoordinates(id,&word,&bit) == C_ERR) return;
-    if (value)
+    if (value) {
         u->allowed_commands[word] |= bit;
-    else
+    } else {
         u->allowed_commands[word] &= ~bit;
+        u->flags &= ~USER_FLAG_ALLCOMMANDS;
+    }
 }
 
 /* This is like ACLSetUserCommandBit(), but instead of setting the specified
@@ -452,17 +478,30 @@ sds ACLDescribeUserCommandRules(user *u) {
     /* Try to add or subtract each category one after the other. Often a
      * single category will not perfectly match the set of commands into
      * it, so at the end we do a final pass adding/removing the single commands
-     * needed to make the bitmap exactly match. */
+     * needed to make the bitmap exactly match. A temp user is maintained to
+     * keep track of categories already applied. */
+    user tu = {0};
+    user *tempuser = &tu;
+    memcpy(tempuser->allowed_commands,
+        u->allowed_commands, 
+        sizeof(u->allowed_commands));
+
     for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
         unsigned long on, off;
-        ACLCountCategoryBitsForUser(u,&on,&off,ACLCommandCategories[j].name);
+        ACLCountCategoryBitsForUser(tempuser,&on,&off,ACLCommandCategories[j].name);
         if ((additive && on > off) || (!additive && off > on)) {
             sds op = sdsnewlen(additive ? "+@" : "-@", 2);
             op = sdscat(op,ACLCommandCategories[j].name);
             ACLSetUser(fakeuser,op,-1);
+
+            sds invop = sdsnewlen(additive ? "-@" : "+@", 2);
+            invop = sdscat(invop,ACLCommandCategories[j].name);
+            ACLSetUser(tempuser,invop,-1);
+
             rules = sdscatsds(rules,op);
             rules = sdscatlen(rules," ",1);
             sdsfree(op);
+            sdsfree(invop);
         }
     }
 
@@ -712,10 +751,11 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * EEXIST: You are adding a key pattern after "*" was already added. This is
  *         almost surely an error on the user side.
  * ENODEV: The password you are trying to remove from the user does not exist.
- * EBADMSG: The hash you are trying to add is not a valid hash. 
+ * EBADMSG: The hash you are trying to add is not a valid hash.
  */
 int ACLSetUser(user *u, const char *op, ssize_t oplen) {
     if (oplen == -1) oplen = strlen(op);
+    if (oplen == 0) return C_OK; /* Empty string is a no-operation. */
     if (!strcasecmp(op,"on")) {
         u->flags |= USER_FLAG_ENABLED;
         u->flags &= ~USER_FLAG_DISABLED;
@@ -753,21 +793,9 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         if (op[0] == '>') {
             newpass = ACLHashPassword((unsigned char*)op+1,oplen-1);
         } else {
-            if (oplen != HASH_PASSWORD_LEN + 1) {
+            if (ACLCheckPasswordHash((unsigned char*)op+1,oplen-1) == C_ERR) {
                 errno = EBADMSG;
                 return C_ERR;
-            }
-
-            /* Password hashes can only be characters that represent
-             * hexadecimal values, which are numbers and lowercase
-             * characters 'a' through 'f'.
-             */
-            for(int i = 1; i < HASH_PASSWORD_LEN + 1; i++) {
-                char c = op[i];
-                if ((c < 'a' || c > 'f') && (c < '0' || c > '9')) {
-                    errno = EBADMSG;
-                    return C_ERR;
-                }
             }
             newpass = sdsnewlen(op+1,oplen-1);
         }
@@ -784,7 +812,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         if (op[0] == '<') {
             delpass = ACLHashPassword((unsigned char*)op+1,oplen-1);
         } else {
-            if (oplen != HASH_PASSWORD_LEN + 1) {
+            if (ACLCheckPasswordHash((unsigned char*)op+1,oplen-1) == C_ERR) {
                 errno = EBADMSG;
                 return C_ERR;
             }
@@ -838,7 +866,6 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
                 errno = ENOENT;
                 return C_ERR;
             }
-            unsigned long id = ACLGetCommandID(copy);
 
             /* The subcommand cannot be empty, so things like DEBUG|
              * are syntax errors of course. */
@@ -851,6 +878,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
             /* The command should not be set right now in the command
              * bitmap, because adding a subcommand of a fully added
              * command is probably an error on the user side. */
+            unsigned long id = ACLGetCommandID(copy);
             if (ACLGetUserCommandBit(u,id) == 1) {
                 zfree(copy);
                 errno = EBUSY;
@@ -1087,8 +1115,9 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
     if (!(c->user->flags & USER_FLAG_ALLKEYS) &&
         (c->cmd->getkeys_proc || c->cmd->firstkey))
     {
-        int numkeys;
-        int *keyidx = getKeysFromCommand(c->cmd,c->argv,c->argc,&numkeys);
+        getKeysResult result = GETKEYS_RESULT_INIT;
+        int numkeys = getKeysFromCommand(c->cmd,c->argv,c->argc,&result);
+        int *keyidx = result.keys;
         for (int j = 0; j < numkeys; j++) {
             listIter li;
             listNode *ln;
@@ -1109,11 +1138,11 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
             }
             if (!match) {
                 if (keyidxptr) *keyidxptr = keyidx[j];
-                getKeysFreeResult(keyidx);
+                getKeysFreeResult(&result);
                 return ACL_DENIED_KEY;
             }
         }
-        getKeysFreeResult(keyidx);
+        getKeysFreeResult(&result);
     }
 
     /* If we survived all the above checks, the user can execute the
@@ -1289,7 +1318,7 @@ sds ACLLoadFromFile(const char *filename) {
         if (lines[i][0] == '\0') continue;
 
         /* Split into arguments */
-        argv = sdssplitargs(lines[i],&argc);
+        argv = sdssplitlen(lines[i],sdslen(lines[i])," ",1,&argc);
         if (argv == NULL) {
             errors = sdscatprintf(errors,
                      "%s:%d: unbalanced quotes in acl line. ",
@@ -1318,14 +1347,18 @@ sds ACLLoadFromFile(const char *filename) {
             errors = sdscatprintf(errors,
                      "'%s:%d: username '%s' contains invalid characters. ",
                      server.acl_filename, linenum, argv[1]);
+            sdsfreesplitres(argv,argc);
             continue;
         }
 
-        /* Try to process the line using the fake user to validate iif
-         * the rules are able to apply cleanly. */
+        /* Try to process the line using the fake user to validate if
+         * the rules are able to apply cleanly. At this stage we also
+         * trim trailing spaces, so that we don't have to handle that
+         * in ACLSetUser(). */
         ACLSetUser(fakeuser,"reset",-1);
         int j;
         for (j = 2; j < argc; j++) {
+            argv[j] = sdstrim(argv[j],"\t\r\n");
             if (ACLSetUser(fakeuser,argv[j],sdslen(argv[j])) != C_OK) {
                 char *errmsg = ACLSetUserStringError();
                 errors = sdscatprintf(errors,
@@ -1899,7 +1932,7 @@ void aclCommand(client *c) {
             addReplyBulkCString(c,"client-info");
             addReplyBulkCBuffer(c,le->cinfo,sdslen(le->cinfo));
         }
-    } else if (!strcasecmp(sub,"help")) {
+    } else if (c->argc == 2 && !strcasecmp(sub,"help")) {
         const char *help[] = {
 "LOAD                             -- Reload users from the ACL file.",
 "SAVE                             -- Save the current config to the ACL file.",

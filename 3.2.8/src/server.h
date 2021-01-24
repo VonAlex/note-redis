@@ -165,7 +165,10 @@ typedef long long mstime_t; /* millisecond time type. */
 /* When configuring the server eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
- * in order to make sure of not over provisioning more than 128 fds. */
+ * in order to make sure of not over provisioning more than 128 fds. 
+ * 当配置 server eventloop 时，我们将要处理的 fd 总数设置为 server.maxclients + RESERVED_FDS + 一点安全裕量。
+ * RESERVED_FDS 默认是 32，加 96 为了确保不超过 128
+ * */
 #define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
 
 /* Hash table parameters */

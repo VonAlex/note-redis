@@ -1197,7 +1197,7 @@ void xaddCommand(client *c) {
     int id_given = 0; /* Was an ID different than "*" specified? */
     long long maxlen = -1;  /* If left to -1 no trimming is performed. */
     int approx_maxlen = 0;  /* If 1 only delete whole radix tree nodes, so
-                               the maxium length is not applied verbatim. */
+                               the maximum length is not applied verbatim. */
     int maxlen_arg_idx = 0; /* Index of the count in MAXLEN, for rewriting. */
 
     /* Parse options. */
@@ -1570,7 +1570,8 @@ void xreadCommand(client *c) {
             addReplyBulk(c,c->argv[streams_arg+i]);
             streamConsumer *consumer = NULL;
             if (groups) consumer = streamLookupConsumer(groups[i],
-                                                        consumername->ptr,1);
+                                                        consumername->ptr,
+                                                        SLC_NONE);
             streamPropInfo spi = {c->argv[i+streams_arg],groupname};
             int flags = 0;
             if (noack) flags |= STREAM_RWR_NOACK;
@@ -1706,7 +1707,9 @@ streamCG *streamLookupCG(stream *s, sds groupname) {
  * consumer does not exist it is automatically created as a side effect
  * of calling this function, otherwise its last seen time is updated and
  * the existing consumer reference returned. */
-streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int create) {
+streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int flags) {
+    int create = !(flags & SLC_NOCREAT);
+    int refresh = !(flags & SLC_NOREFRESH);
     streamConsumer *consumer = raxFind(cg->consumers,(unsigned char*)name,
                                sdslen(name));
     if (consumer == raxNotFound) {
@@ -1717,7 +1720,7 @@ streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int create) {
         raxInsert(cg->consumers,(unsigned char*)name,sdslen(name),
                   consumer,NULL);
     }
-    consumer->seen_time = mstime();
+    if (refresh) consumer->seen_time = mstime();
     return consumer;
 }
 
@@ -1725,7 +1728,8 @@ streamConsumer *streamLookupConsumer(streamCG *cg, sds name, int create) {
  * may have pending messages: they are removed from the PEL, and the number
  * of pending messages "lost" is returned. */
 uint64_t streamDelConsumer(streamCG *cg, sds name) {
-    streamConsumer *consumer = streamLookupConsumer(cg,name,0);
+    streamConsumer *consumer =
+        streamLookupConsumer(cg,name,SLC_NOCREAT|SLC_NOREFRESH);
     if (consumer == NULL) return 0;
 
     uint64_t retval = raxSize(consumer->pel);
@@ -1837,6 +1841,7 @@ NULL
             o = createStreamObject();
             dbAdd(c->db,c->argv[2],o);
             s = o->ptr;
+            signalModifiedKey(c,c->db,c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s,grpname,sdslen(grpname),&id);
@@ -1881,14 +1886,14 @@ NULL
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM,"xgroup-delconsumer",
                             c->argv[2],c->db->id);
-    } else if (!strcasecmp(opt,"HELP")) {
+    } else if (c->argc == 2 && !strcasecmp(opt,"HELP")) {
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);
     }
 }
 
-/* XSETID <stream> <groupname> <id>
+/* XSETID <stream> <id>
  *
  * Set the internal "last ID" of a stream. */
 void xsetidCommand(client *c) {
@@ -1977,7 +1982,7 @@ void xackCommand(client *c) {
  *
  * If start and stop are omitted, the command just outputs information about
  * the amount of pending messages for the key/group pair, together with
- * the minimum and maxium ID of pending messages.
+ * the minimum and maximum ID of pending messages.
  *
  * If start and stop are provided instead, the pending messages are returned
  * with informations about the current owner, number of deliveries and last
@@ -2068,15 +2073,18 @@ void xpendingCommand(client *c) {
     }
     /* XPENDING <key> <group> <start> <stop> <count> [<consumer>] variant. */
     else {
-        streamConsumer *consumer = consumername ?
-                                streamLookupConsumer(group,consumername->ptr,0):
-                                NULL;
+        streamConsumer *consumer = NULL;
+        if (consumername) {
+            consumer = streamLookupConsumer(group,
+                                            consumername->ptr,
+                                            SLC_NOCREAT|SLC_NOREFRESH);
 
-        /* If a consumer name was mentioned but it does not exist, we can
-         * just return an empty array. */
-        if (consumername && consumer == NULL) {
-            addReplyArrayLen(c,0);
-            return;
+            /* If a consumer name was mentioned but it does not exist, we can
+             * just return an empty array. */
+            if (consumer == NULL) {
+                addReplyArrayLen(c,0);
+                return;
+            }
         }
 
         rax *pel = consumer ? consumer->pel : group->pel;
@@ -2338,7 +2346,7 @@ void xclaimCommand(client *c) {
                 raxRemove(nack->consumer->pel,buf,sizeof(buf),NULL);
             /* Update the consumer and idle time. */
             if (consumer == NULL)
-                consumer = streamLookupConsumer(group,c->argv[3]->ptr,1);
+                consumer = streamLookupConsumer(group,c->argv[3]->ptr,SLC_NONE);
             nack->consumer = consumer;
             nack->delivery_time = deliverytime;
             /* Set the delivery attempts counter if given, otherwise
