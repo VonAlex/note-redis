@@ -1989,14 +1989,12 @@ void initServer(void) {
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
-   // 打开 TCP 监听端口，用于等待客户端的命令请求，ipfd 为 socket fd，ipfd数组长度为 ipfd_count 大小
+   // 打开 TCP 监听端口，用于等待客户端的命令请求，ipfd 为 socket fd，ipfd 数组长度为 ipfd_count 大小
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == C_ERR)
         exit(1);
 
-    /* Open the listening Unix domain socket.
-    * 打开监听的 Unix domain socket
-    */
+    /* Open the listening Unix domain socket. */
     if (server.unixsocket != NULL) {
         unlink(server.unixsocket); /* don't care if this fails */
         server.sofd = anetUnixServer(server.neterr,server.unixsocket,
@@ -2015,7 +2013,7 @@ void initServer(void) {
     }
 
     /* Create the Redis databases, and initialize other internal state. */
-    // 创建并初始化数据库，不同类型的 dict 有不同的 key 比较函数已经 hash 函数
+    // 创建并初始化数据库
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
@@ -2472,15 +2470,29 @@ void call(client *c, int flags) {
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
  * server for a bulk read from the client.
- *
+ * 该函数在我们已经读取整个命令后调用，参数在 client argv/argc 变量中
+ * processCommand() 用来执行该命令，或 prepare server 以从 client 批量读取
+ * 
  * If C_OK is returned the client is still alive and valid and
- * other operations can be performed by the caller. Otherwise
- * if C_ERR is returned the client was destroyed (i.e. after QUIT). */
+ * other operations can be performed by the caller. 
+ * 如果返回 C_OK，client 仍然有效可用，且可以被 caller 执行其他操作。
+ * 
+ * Otherwise if C_ERR is returned the client was destroyed (i.e. after QUIT).
+ * 否则，如果返回 C_ERR，client 被销毁（如 QUIT 命令之后）
+ * */
 int processCommand(client *c) {
-    /* The QUIT command is handled separately. Normal command procs will
-     * go through checking for replication and QUIT will cause trouble
-     * when FORCE_REPLICATION is enabled and would be implemented in
-     * a regular command proc. */
+    /* The QUIT command is handled separately. 
+     * QUIT 命令单独处理。
+     * 
+     * Normal command procs will go through checking for replication 
+     * 正常命令处理将经历 replication 的检查。
+     * 
+     * and QUIT will cause trouble when FORCE_REPLICATION is enabled 
+     * 当带有 FORCE_REPLICATION flag 时 QUIT 将带来问题，
+     * 
+     * and would be implemented in a regular command proc. 
+     * 将在正常 command 处理函数中实现。
+     * */
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -2488,14 +2500,15 @@ int processCommand(client *c) {
     }
 
     /* Now lookup the command and check ASAP about trivial error conditions
-     * such as wrong arity, bad command name and so forth. */
+     * such as wrong arity, bad command name and so forth. 
+     * 查找 command，并立即检查一些小问题，如错误的参数数量、错误的 command 名字等
+     * */
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
         flagTransaction(c);
         addReplyErrorFormat(c,"unknown command '%s'",
             (char*)c->argv[0]->ptr);
         return C_OK;
-    // 参数数量不匹配
     } else if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) ||
                (c->argc < -c->cmd->arity)) {
         flagTransaction(c);
@@ -2504,8 +2517,8 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    // 如果服务器设置了密码，但是没有认证成功
     /* Check if the user is authenticated */
+    // 如果服务器设置了密码，但是没有认证成功
     if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)
     {
         flagTransaction(c);
@@ -2514,13 +2527,14 @@ int processCommand(client *c) {
     }
 
     /* If cluster is enabled perform the cluster redirection here.
+     * 如果开启了 cluster 模式，要在这里执行 cluster 重定向
      * However we don't perform the redirection if:
      * 1) The sender of this command is our master.
-     * 2) The command has no key arguments. */
-     // 开启了 cluster 模式，要在这里执行 cluster 重定向
-     // 除了以下两种情况：
-     // 1) 命令的发送者是我的 master
-     // 2) 命令没有参数
+     * 1）我们的 master 发过来的 command
+     * 
+     * 2) The command has no key arguments. 
+     * 2）命令没有 key 参数
+     * */
     if (server.cluster_enabled &&
         !(c->flags & CLIENT_MASTER) &&
         !(c->flags & CLIENT_LUA &&
@@ -2530,7 +2544,7 @@ int processCommand(client *c) {
     {
         int hashslot;
         int error_code;
-        // 从集群中返回一个能够执行命令的节点
+        
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
                                         &hashslot,&error_code);
 
