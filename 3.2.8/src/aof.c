@@ -1454,12 +1454,17 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
          * the configured file and switch the file descriptor used to do AOF
          * writes. We don't want close(2) or rename(2) calls to block the
          * server on old file deletion.
+         * 剩下的唯一要做的事情是重命名临时配置文件，并切换用来做 aof write 的 fd。
+         * 我们不想 close(2) 或者 rename(2) 调用阻塞在 old 文件的删除上。
          *
          * There are two possible scenarios:
+         * 有以下两个场景
          *
          * 1) AOF is DISABLED and this was a one time rewrite. The temporary
          * file will be renamed to the configured file. When this file already
          * exists, it will be unlinked, which may block the server.
+         * AOF 功能是关闭的，这是一个一次性的 rewrite 行为。
+         * 临时文件将被重命名为配置文件。当这个文件已经存在了，它将做 unlink 操作，这有可能阻塞 server。
          *
          * 2) AOF is ENABLED and the rewritten AOF will immediately start
          * receiving writes. After the temporary file is renamed to the
@@ -1467,18 +1472,26 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
          * Since this will be the last reference to that file, closing it
          * causes the underlying file to be unlinked, which may block the
          * server.
+         * AOF 功能是开启的，重写 AOF 将立即开始接收 write。
+         * 将临时文件重命名为配置文件后，原来的 AOF 文件 fd 将被关闭。
+         * 既然这将是该文件的最后一个引用，关闭它将导致潜在文件的 unlink，这有可能阻塞 server。
          *
          * To mitigate the blocking effect of the unlink operation (either
          * caused by rename(2) in scenario 1, or by close(2) in scenario 2), we
          * use a background thread to take care of this.
+         * 为了减少 unlink 操作在场景 1 被rename(2) 或者 close(2) 在场景 2 引起的阻塞副作用，
+         * 我们使用 bio 来处理这些情况
          *
          * First, we make scenario 1 identical to scenario 2 by opening the target file
          * when it exists. The unlink operation after the rename(2) will then
          * be executed upon calling close(2) for its descriptor.
+         * 首先，我们通过打开目标文件，使方案 1 与方案 2 相同。
+         * rename(2)  后的 unlink 操作将在其为 fd 调用 close(2) 后执行。
          *
          * Everything to guarantee atomicity for this switch has already happened by then,
          * so we don't care what the outcome or duration of that close operation is,
-         * as long as the file descriptor is released again. */
+         * as long as the file descriptor is released again. 
+         * */
         if (server.aof_fd == -1) {
             /* AOF disabled */
 

@@ -590,7 +590,7 @@ typedef struct client {
     robj **argv;            /* Arguments of current command. */
     struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
     int reqtype;            /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;       /* Number of multi bulk arguments left to read. */
+    int multibulklen;       /* Number of multi bulk arguments left to read. 剩余未读的参数个数*/
     long bulklen;           /* Length of bulk argument in multi bulk request. */
     list *reply;            /* List of reply objects to send to the client. */
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
@@ -628,7 +628,7 @@ typedef struct client {
 
     /* Response buffer */
     int bufpos;
-    char buf[PROTO_REPLY_CHUNK_BYTES]; // 16k 数据
+    char buf[PROTO_REPLY_CHUNK_BYTES]; // 16k 数据，静态 buf
 } client;
 
 /*

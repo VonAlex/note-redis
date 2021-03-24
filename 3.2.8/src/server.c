@@ -1041,6 +1041,8 @@ void clientsCron(void) {
      * per call. Since this function is called server.hz times per second
      * we are sure that in the worst case we process all the clients in 1
      * second. */
+     // 每次处理 numclients/server.hz 个 client。
+     // 该函数每秒调用 server.hz，所以这就保证了 1s 可以处理完所有的 client
     int numclients = listLength(server.clients);
     int iterations = numclients/server.hz;
     mstime_t now = mstime();
@@ -2101,7 +2103,6 @@ void initServer(void) {
 
     // 如果开启了 cluster 模式，进行相应的初始化，监听 port+ 10000 端口
     if (server.cluster_enabled) clusterInit();
-
     replicationScriptCacheInit();
     scriptingInit(1);
     slowlogInit();

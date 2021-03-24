@@ -35,14 +35,19 @@ static void setProtocolError(client *c, int pos);
 
 /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
- * the client output buffer size. */
+ * the client output buffer size.
+ * 返回分配器消费的内存大小，包括内部碎片。
+ * 该函数在计算 client output buffer 大小时使用。
+ */
 size_t sdsZmallocSize(sds s) {
     void *sh = sdsAllocPtr(s);
     return zmalloc_size(sh);
 }
 
 /* Return the amount of memory used by the sds string at object->ptr
- * for a string object. */
+ * for a string object. 
+ * 返回 sds 字符串在 object->ptr 处使用到的内存量
+ * */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
@@ -202,7 +207,7 @@ int prepareClientToWrite(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. 
          * 这里仅仅把 client 做个标识，并把它放入 clients 列表中，这个列表中 client 都会有一些东西需要往 socket 写入，
-         * 而不会直接注册写时间处理函数。
+         * 而不会直接注册写事件处理函数。
          * 在重新进入事件循环之前使用这种方式，我们可以尝试直接写入到 client socket，避免了系统调用。
          * 如果我们不能一次写入所有的 reply，将注册写时间处理函数。
          * */
@@ -240,10 +245,14 @@ int _addReplyToBuffer(client *c, const char *s, size_t len) {
     if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return C_OK;
 
     /* If there already are entries in the reply list, we cannot
-     * add anything more to the static buffer. */
+     * add anything more to the static buffer. 
+     * 如果在回复列表里已经有 entries 了，我们不能往 static buffer 里加东西了
+     */
     if (listLength(c->reply) > 0) return C_ERR;
 
-    /* Check that the buffer has enough space available for this string. */
+    /* Check that the buffer has enough space available for this string. 
+     * 检查 buffer 是否有足够的空间来容纳这个字符串
+     */
     if (len > available) return C_ERR;
 
     memcpy(c->buf+c->bufpos,s,len);
@@ -356,17 +365,24 @@ void addReply(client *c, robj *obj) {
     /* This is an important place where we can avoid copy-on-write
      * when there is a saving child running, avoiding touching the
      * refcount field of the object if it's not needed.
+     * 当有一个子进程在跑时，这是一个避免 copy-on-write 很重要的地方，
+     * 避免操作 object 的 refcount 变量，除非是必须的。
      *
      * If the encoding is RAW and there is room in the static buffer
      * we'll be able to send the object to the client without
-     * messing with its page. */
+     * messing with its page. 
+     * 如果 encoding 是 RAW，并且在 static buffer 中有空间，我们可以在不弄脏其他 page 的情况下
+     * 将 object 发到 client，
+     */
     if (sdsEncodedObject(obj)) {
         if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != C_OK)
             _addReplyObjectToList(c,obj);
     } else if (obj->encoding == OBJ_ENCODING_INT) {
         /* Optimization: if there is room in the static buffer for 32 bytes
          * (more than the max chars a 64 bit integer can take as string) we
-         * avoid decoding the object and go for the lower level approach. */
+         * avoid decoding the object and go for the lower level approach. 
+         * 优化：如果在静态 buffer 里有 32 字节的空间，我们可以避免 decoding object，并直接走 lower level 接口。
+         */
         if (listLength(c->reply) == 0 && (sizeof(c->buf) - c->bufpos) >= 32) {
             char buf[32];
             int len;
@@ -1238,6 +1254,7 @@ int processMultibulkBuffer(client *c) {
                 return C_ERR;
             }
 
+            // 先读参数长度
             ok = string2ll(c->querybuf+pos+1,newline-(c->querybuf+pos+1),&ll);
             if (!ok || ll < 0 || ll > 512*1024*1024) {
                 addReplyError(c,"Protocol error: invalid bulk length");
@@ -1323,6 +1340,7 @@ void processInputBuffer(client *c) {
         /* Determine request type when unknown. */
         if (!c->reqtype) {
             if (c->querybuf[0] == '*') {
+                // 如 *2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n
                 c->reqtype = PROTO_REQ_MULTIBULK;
             } else {
                 c->reqtype = PROTO_REQ_INLINE;
@@ -1353,6 +1371,7 @@ void processInputBuffer(client *c) {
 }
 
 // 读取 client 的输入缓冲区的内容
+// *multibulklen\r\n$bulklen\r\n....\r\n$bulklen\r\n.....\r\n
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     client *c = (client*) privdata;
     int nread, readlen;
@@ -1365,9 +1384,15 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* If this is a multi bulk request, and we are processing a bulk reply
      * that is large enough, try to maximize the probability that the query
      * buffer contains exactly the SDS string representing the object, even
-     * at the risk of requiring more read(2) calls. This way the function
-     * processMultiBulkBuffer() can avoid copying buffers to create the
-     * Redis Object representing the argument. */
+     * at the risk of requiring more read(2) calls. 
+     * 如果这是一个批量请求，且我们正在处理足够大的批量回复，尽量让 query buffer 恰好包含代表 object 的 sds 字符串，
+     * 甚至不惜冒着需要调用更多 read(2) 的风险。
+     *
+     * This way the function processMultiBulkBuffer() can avoid copying buffers to create the
+     * Redis Object representing the argument. 
+     * 用这种方式，processMultiBulkBuffer() 可以避免拷贝 buffers 来创建参数表示的 Redis Object。
+     */
+     // *1\r\n\$7\r\nCOMMAND\r\n
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
@@ -1396,9 +1421,10 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     sdsIncrLen(c->querybuf,nread);
     c->lastinteraction = server.unixtime;
+
     if (c->flags & CLIENT_MASTER) c->reploff += nread;
     server.stat_net_input_bytes += nread;
-    if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
+    if (sdslen(c->querybuf) > server.client_max_querybuf_len) { // 不能大于 1G
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
@@ -1887,10 +1913,15 @@ int checkClientOutputBufferLimits(client *c) {
 /* Asynchronously close a client if soft or hard limit is reached on the
  * output buffer size. The caller can check if the client will be closed
  * checking if the client CLIENT_CLOSE_ASAP flag is set.
+ * 如果软或硬限制达到了 output buffer 大小， 异步关闭一个 client。
+ * 通过检查 client 是否带有 CLIENT_CLOSE_ASAP 标识，caller 可以检查是否关闭这个 client 
  *
  * Note: we need to close the client asynchronously because this function is
  * called from contexts where the client can't be freed safely, i.e. from the
- * lower level functions pushing data inside the client output buffers. */
+ * lower level functions pushing data inside the client output buffers. 
+ * 注意：我们应该异步关闭 client，因为该函数在 client 不能被安全 free 的上下文中调用，
+ * 比如，从 lower level 函数在 client output buffers 内部 push data
+ * */
 void asyncCloseClientOnOutputBufferLimitReached(client *c) {
     serverAssert(c->reply_bytes < SIZE_MAX-(1024*64));
     if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return;
@@ -1935,20 +1966,29 @@ void flushSlavesOutputBuffers(void) {
 /* Pause clients up to the specified unixtime (in ms). While clients
  * are paused no command is processed from clients, so the data set can't
  * change during that time.
+ * 阻塞 clients 特定的时间(ms)。
+ * 当 clients 被暂停时，来自 clients 的 command 都不会被处理，所以数据集在这段时间内不能变
  *
  * However while this function pauses normal and Pub/Sub clients, slaves are
  * still served, so this function can be used on server upgrades where it is
  * required that slaves process the latest bytes from the replication stream
  * before being turned to masters.
+ * 然而，当这个函数暂停正常或 Pub/Sub clients 时，slave 仍然接受服务，因此，在发生主从切换时，
+ * slave 转变为 master 之前需要处理来自 replication stream 最新的字节，这个函数就要使用了。
  *
  * This function is also internally used by Redis Cluster for the manual
  * failover procedure implemented by CLUSTER FAILOVER.
+ * 这个函数被 Redis Cluster 内部使用，用于 CLUSTER FAILOVER 命令实现的 mf 流程。
  *
  * The function always succeed, even if there is already a pause in progress.
  * In such a case, the pause is extended if the duration is more than the
  * time left for the previous duration. However if the duration is smaller
  * than the time left for the previous pause, no change is made to the
- * left duration. */
+ * left duration.
+ * 这个函数总会成功，即使在进程中有 pause 了。
+ * 在这样一个 case 里，如果持续时间大于上一个 duration 剩余的时间，则 pause 会延长。
+ * 反之，剩余的 duration 不会发生改变
+ *  */
 void pauseClients(mstime_t end) {
     if (!server.clients_paused || end > server.clients_pause_end_time)
         server.clients_pause_end_time = end;
