@@ -2304,6 +2304,7 @@ void preventCommandReplication(client *c) {
 
 /* Call() is the core of Redis execution of a command.
  * call() 是 Redis 执行命令的核心
+ *
  * The following flags can be passed:
  * CMD_CALL_NONE             No flags.
  * CMD_CALL_SLOWLOG         Check command speed and log in the slow log if needed.
@@ -2327,16 +2328,16 @@ void preventCommandReplication(client *c) {
  *    are set, the propagation into AOF or to slaves is not performed even
  *    if the command modified the dataset.
  *
- * 不管 client 的 flags 如何指定，
- * 只要 CMD_CALL_PROPAGATE_AOF or CMD_CALL_PROPAGATE_REPL 没有被指定，传播操作将不会发生
- *
+ * 
  * Note that regardless of the client flags, if CMD_CALL_PROPAGATE_AOF
  * or CMD_CALL_PROPAGATE_REPL are not set, then respectively AOF or
  * slaves propagation will never occur.
+ * 不管 client 的 flags 如何指定，
+ * 只要 CMD_CALL_PROPAGATE_AOF or CMD_CALL_PROPAGATE_REPL 没有被指定，传播操作将不会发生
  *
- * client 的 flags 被修改的接口如下
  * Client flags are modified by the implementation of a given command
- * using the following API:
+ * using the following API: 
+ * client 的 flags 被修改的接口如下
  *
  * forceCommandPropagation(client *c, int flags);
  * preventCommandPropagation(client *c);
@@ -2432,7 +2433,7 @@ void call(client *c, int flags) {
 
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. */
-         // 如果至少设置了一种传播，则执行相应传播命令操作
+        // 如果有需要，将命令传播出去 
         if (propagate_flags != PROPAGATE_NONE)
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }

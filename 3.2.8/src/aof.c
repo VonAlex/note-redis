@@ -1127,6 +1127,7 @@ int rewriteAppendOnlyFile(char *filename) {
             expiretime = getExpire(db,&key);
 
             // 如果这个 key 已经过期了，那么跳过它
+            // 会造成主从 key 数量的一致
             if (expiretime != -1 && expiretime < now) continue;
 
              // 根据值的对象类型，将键值对写到AOF文件中

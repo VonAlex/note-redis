@@ -192,9 +192,7 @@ int prepareClientToWrite(client *c) {
      * if not already done (there were no pending writes already and the client
      * was yet not flagged), and, for slaves, if the slave can actually
      * receive writes at this stage. 
-     * 调度 client 将输入缓冲区到 socket，仅当此时没有 pending writes 或者 client 不带任何标识。
-     * 对于 slave，如果它的确可以在这个阶段接收 write
-     * */
+     */
     if (!clientHasPendingReplies(c) &&
         !(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
@@ -209,7 +207,7 @@ int prepareClientToWrite(client *c) {
          * 这里仅仅把 client 做个标识，并把它放入 clients 列表中，这个列表中 client 都会有一些东西需要往 socket 写入，
          * 而不会直接注册写事件处理函数。
          * 在重新进入事件循环之前使用这种方式，我们可以尝试直接写入到 client socket，避免了系统调用。
-         * 如果我们不能一次写入所有的 reply，将注册写时间处理函数。
+         * 如果我们不能一次写入所有的 reply，将注册写事件处理函数。
          * */
         c->flags |= CLIENT_PENDING_WRITE;
         listAddNodeHead(server.clients_pending_write,c);
@@ -1072,7 +1070,7 @@ int handleClientsWithPendingWrites(void) {
 
         /* If there is nothing left, do nothing. Otherwise install
          * the write handler. */
-        // 如果 没有写完，注册写事件进行处理
+        // 如果没有写完，注册写事件进行处理
         if (clientHasPendingReplies(c) &&
             aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
                 sendReplyToClient, c) == AE_ERR)
@@ -1181,6 +1179,11 @@ static void setProtocolError(client *c, int pos) {
     sdsrange(c->querybuf,pos,-1);
 }
 
+// 设置 client c 的 query buffer，设置 command 执行所需要的参数向量
+// 如果运行该函数后，client 拥有了格式正确的要执行的命令，返回 C_OK，
+// 如果还需要读更多的 buffer 来获得完整的命令，返回 C_ERR。
+// 如果协议有错误，也会返回 C_ERR。
+// 将 client 的 querybuf 中的协议内容转换为 client 的参数列表中的对象
 int processMultibulkBuffer(client *c) {
     char *newline = NULL;
     int pos = 0, ok;
@@ -1201,30 +1204,35 @@ int processMultibulkBuffer(client *c) {
         }
 
         /* Buffer should also contain \n */
+        // buffer 必须包含 \n
         if (newline-(c->querybuf) > ((signed)sdslen(c->querybuf)-2))
             return C_ERR;
 
         /* We know for sure there is a whole line since newline != NULL,
-         * so go ahead and find out the multi bulk length. */
+         * so go ahead and find out the multi bulk length. 
+         */
+        // querybuf 第一个字符必须是 *
         serverAssertWithInfo(c,NULL,c->querybuf[0] == '*');
+
+        // 将'*'之后的数字转换为整数。如，*3\r\n，ll 取值为 3
         ok = string2ll(c->querybuf+1,newline-(c->querybuf+1),&ll);
-        if (!ok || ll > 1024*1024) {
+        if (!ok || ll > 1024*1024) { // 限制 multibulk，不能超过 1024*1024
             addReplyError(c,"Protocol error: invalid multibulk length");
             setProtocolError(c,pos);
             return C_ERR;
         }
-
+        // pos 指向参数的第一个字节,如 *3\r\n$3\r\nSET...，pos 指向 $ 字符
         pos = (newline-c->querybuf)+2;
         if (ll <= 0) {
             sdsrange(c->querybuf,pos,-1);
             return C_OK;
         }
 
-        c->multibulklen = ll;
+        c->multibulklen = ll; // bulk 大小，*3\r\n 就表示后面有 3 个参数
 
         /* Setup argv array on client structure */
         if (c->argv) zfree(c->argv);
-        c->argv = zmalloc(sizeof(robj*)*c->multibulklen);
+        c->argv = zmalloc(sizeof(robj*)*c->multibulklen); // c->argv 存放参数个数，分配 multibulklen 个 robj 内存
     }
 
     serverAssertWithInfo(c,NULL,c->multibulklen > 0);
@@ -1246,6 +1254,7 @@ int processMultibulkBuffer(client *c) {
             if (newline-(c->querybuf) > ((signed)sdslen(c->querybuf)-2))
                 break;
 
+            // 参数部分第一个字符必须是 $,如 $3\r\nSET\r\n...
             if (c->querybuf[pos] != '$') {
                 addReplyErrorFormat(c,
                     "Protocol error: expected '$', got '%c'",
@@ -1254,22 +1263,25 @@ int processMultibulkBuffer(client *c) {
                 return C_ERR;
             }
 
-            // 先读参数长度
+            // 当前参数的长度，如 $3\r\nSET\r\n...，SET 参数的长度是 3
             ok = string2ll(c->querybuf+pos+1,newline-(c->querybuf+pos+1),&ll);
-            if (!ok || ll < 0 || ll > 512*1024*1024) {
+            if (!ok || ll < 0 || ll > 512*1024*1024) { // 限制参数的大小不超过 512M
                 addReplyError(c,"Protocol error: invalid bulk length");
                 setProtocolError(c,pos);
                 return C_ERR;
             }
 
-            pos += newline-(c->querybuf+pos)+2;
-            if (ll >= PROTO_MBULK_BIG_ARG) {
+            pos += newline-(c->querybuf+pos)+2; // 下一个参数的起始位置
+            if (ll >= PROTO_MBULK_BIG_ARG) { // 32K 算大 object
                 size_t qblen;
 
                 /* If we are going to read a large object from network
                  * try to make it likely that it will start at c->querybuf
                  * boundary so that we can optimize object creation
-                 * avoiding a large copy of data. */
+                 * avoiding a large copy of data.
+                 * 如果我们要从网络读取一个大的 object，试着从 c->querybuf 边界开始读，
+                 * 以便我们可以优化 object 创建，避免大量数据复制。
+                 */
                 sdsrange(c->querybuf,pos,-1);
                 pos = 0;
                 qblen = sdslen(c->querybuf);
@@ -1278,17 +1290,20 @@ int processMultibulkBuffer(client *c) {
                 if (qblen < (size_t)ll+2)
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-qblen);
             }
-            c->bulklen = ll;
+            c->bulklen = ll; // 当前参数长度为 ll
         }
 
         /* Read bulk argument */
-        if (sdslen(c->querybuf)-pos < (unsigned)(c->bulklen+2)) {
+        if (sdslen(c->querybuf)-pos < (unsigned)(c->bulklen+2)) { // 没有足够数据了
             /* Not enough data (+2 == trailing \r\n) */
             break;
         } else {
             /* Optimization: if the buffer contains JUST our bulk element
              * instead of creating a new object by *copying* the sds we
-             * just use the current sds string. */
+             * just use the current sds string. 
+             * 优化：如果 buffer 仅包含 bulk 元素。
+             * 使用现有的 sds，而不是通过 copy sds 创建一个新的 object
+             */
             if (pos == 0 &&
                 c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 (signed) sdslen(c->querybuf) == c->bulklen+2)
@@ -1301,19 +1316,24 @@ int processMultibulkBuffer(client *c) {
                 sdsclear(c->querybuf);
                 pos = 0;
             } else {
+                // 创建对象保存在client的参数列表中
                 c->argv[c->argc++] =
                     createStringObject(c->querybuf+pos,c->bulklen);
                 pos += c->bulklen+2;
             }
+            // 清空命令内容的长度
             c->bulklen = -1;
+            // 未读取命令参数的数量，读取一个，该值减1
             c->multibulklen--;
         }
     }
 
     /* Trim to pos */
+    // 删除已经读取的，保留未读取的
     if (pos) sdsrange(c->querybuf,pos,-1);
 
     /* We're done when c->multibulk == 0 */
+    // 命令的参数全部被读取完
     if (c->multibulklen == 0) return C_OK;
 
     /* Still not read to process the command */
@@ -1403,8 +1423,10 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
+    
+    // 读 readlen 的数据放到 c->querybuf
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
-    nread = read(fd, c->querybuf+qblen, readlen);
+    nread = read(fd, c->querybuf+qblen, readlen); 
     if (nread == -1) {
         if (errno == EAGAIN) {
             return;
@@ -1826,7 +1848,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * 此函数现在的主要用处是获得 client output 长度限制。
  * */
 unsigned long getClientOutputBufferMemoryUsage(client *c) {
-    unsigned long list_item_size = sizeof(listNode)+sizeof(robj);
+    unsigned long list_item_size = sizeof(listNode)+sizeof(robj); // 每个 list node 的大小
 
     return c->reply_bytes + (list_item_size*listLength(c->reply));
 }

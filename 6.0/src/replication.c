@@ -713,7 +713,9 @@ void syncCommand(client *c) {
     if (c->flags & CLIENT_SLAVE) return;
 
     /* Refuse SYNC requests if we are a slave but the link with our master
-     * is not ok... */
+     * is not ok... 
+     * 拒绝 SYNC 请求，如果我是一个 slave，但是与 master 的 link 还没 OK
+     */
     if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED) {
         addReplySds(c,sdsnew("-NOMASTERLINK Can't SYNC while not connected with my master\r\n"));
         return;
@@ -2057,7 +2059,7 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
         char *end = reply+9;
         while(end[0] != '\r' && end[0] != '\n' && end[0] != '\0') end++;
         if (end-start == CONFIG_RUN_ID_SIZE) {
-            char new[CONFIG_RUN_ID_SIZE+1];
+            char new[CONFIG_RUN_ID_SIZE+1]; // 从新 master 获得的 replid
             memcpy(new,start,CONFIG_RUN_ID_SIZE);
             new[CONFIG_RUN_ID_SIZE] = '\0';
 
@@ -2485,14 +2487,12 @@ int cancelReplicationHandshake(void) {
 
 /* Set replication to the specified master address and port. */
 void replicationSetMaster(char *ip, int port) {
-    int was_master = server.masterhost == NULL;
+    int was_master = server.masterhost == NULL; // 以前是否为 master
 
     sdsfree(server.masterhost);
     server.masterhost = sdsnew(ip);
     server.masterport = port;
-    if (server.master) {
-        freeClient(server.master);
-    }
+    if (server.master) freeClient(server.master);
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
 
     /* Update oom_score_adj */
@@ -2784,11 +2784,19 @@ void replicationCacheMaster(client *c) {
  * create from scratch a cached master for the new client, that will allow
  * to PSYNC with the slave that was promoted as the new master after a
  * failover.
+ * 当把一个 master 转变成 slave 时，会调用该函数，以便为新 client 从头创建一个 cached master，
+ * 方便跟 failover 后 promote 的新 master (以前是我的 slave) 做 PSYNC。
  *
  * Assuming this instance was previously the master instance of the new master,
+ * 假设这个 instance 以前是新的 master 的 master (即，做了个主从切换)，
+ *
  * the new master will accept its replication ID, and potentiall also the
- * current offset if no data was lost during the failover. So we use our
- * current replication ID and offset in order to synthesize a cached master. */
+ * current offset if no data was lost during the failover.
+ * 如果在 failover 期间没有发生数据丢失，那么新 master 将接受它的 replication ID，也能接受它当前的 offset
+ *
+ * So we use our current replication ID and offset in order to synthesize a cached master. 
+ * 所以，我们使用现在的 replication ID 和 offset 来初始化一个 cached master.
+ */
 void replicationCacheMasterUsingMyself(void) {
     serverLog(LL_NOTICE,
         "Before turning into a replica, using my own master parameters "
@@ -2796,9 +2804,14 @@ void replicationCacheMasterUsingMyself(void) {
         "the new master with just a partial transfer.");
 
     /* This will be used to populate the field server.master->reploff
-     * by replicationCreateMasterClient(). We'll later set the created
-     * master as server.cached_master, so the replica will use such
-     * offset for PSYNC. */
+     * by replicationCreateMasterClient(). 
+     * 这用于在 replicationCreateMasterClient() 函数中 populate server.master->reploff 变量
+     *
+     * We'll later set the created master as server.cached_master, 
+     * so the replica will use such offset for PSYNC. 
+     * 稍后我们会将 created master 用作 server.cached_master，
+     * 因此，这个 replica 将使用这个 offset 做 PSYNC
+     */
     server.master_initial_offset = server.master_repl_offset;
 
     /* The master client we create can be set to any DBID, because
