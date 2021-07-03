@@ -200,10 +200,10 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
-/* Propagate write commands to slaves, and populate the replication backlog
- * as well. This function is used if the instance is a master: we use
- * the commands received by our clients in order to create the replication
- * stream. Instead if the instance is a slave and has sub-slaves attached,
+/* Propagate write commands to slaves, and populate the replication backlog as well. 
+ * This function is used if the instance is a master: 
+ * we use the commands received by our clients in order to create the replication stream. 
+ * Instead if the instance is a slave and has sub-slaves attached,
  * we use replicationFeedSlavesFromMasterStream() */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
@@ -216,6 +216,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * propagate *identical* replication stream. In this way this slave can
      * advertise the same replication ID as the master (since it shares the
      * master replication history and has the same backlog and offsets). */
+    // 如果不是顶层 master，立即返回
     if (server.masterhost != NULL) return;
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
@@ -264,7 +265,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Add the multi bulk reply length. */
         aux[0] = '*';
-        len = ll2string(aux+1,sizeof(aux)-1,argc);
+        len = ll2string(aux+1,sizeof(aux)-1,argc); // 长度
         aux[len+1] = '\r';
         aux[len+2] = '\n';
         feedReplicationBacklog(aux,len+3);
@@ -522,15 +523,19 @@ int masterTryPartialResynchronization(client *c) {
     /* Parse the replication offset asked by the slave. Go to full sync
      * on parse error: this should never happen but we try to handle
      * it in a robust way compared to aborting. */
+    // psync_offset 解析出错，就执行 full resync
+    // 虽然很少发生，但是会以一种健壮的方式去处理，而不是简单地丢掉
     if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
        C_OK) goto need_full_resync;
 
-    /* Is the replication ID of this master the same advertised by the wannabe
-     * slave via PSYNC? If the replication ID changed this master has a
+    /* Is the replication ID of this master the same advertised by the wannabe slave via PSYNC? 
+     * If the replication ID changed this master has a
      * different replication history, and there is no way to continue.
      *
      * Note that there are two potentially valid replication IDs: the ID1
      * and the ID2. The ID2 however is only valid up to a specific offset. */
+
+    
     if (strcasecmp(master_replid, server.replid) &&
         (strcasecmp(master_replid, server.replid2) ||
          psync_offset > server.second_replid_offset))
@@ -722,9 +727,14 @@ void syncCommand(client *c) {
     }
 
     /* SYNC can't be issued when the server has pending data to send to
-     * the client about already issued commands. We need a fresh reply
-     * buffer registering the differences between the BGSAVE and the current
-     * dataset, so that we can copy to other slaves if needed. */
+     * the client about already issued commands. 
+     * 如果有请求还没有得到回复，那么不允许发 SYNC 命令
+     * 
+     * We need a fresh reply buffer registering the differences between the BGSAVE and the current
+     * dataset, so that we can copy to other slaves if needed. 
+     * 我们需要一个新的 reply buffer 来保存在 BGSAVE 和现在数据集之间的差异，
+     * 以方便给其他 slave 做复用。
+     * */
     if (clientHasPendingReplies(c)) {
         addReplyError(c,"SYNC and PSYNC are invalid with pending output");
         return;
@@ -734,9 +744,12 @@ void syncCommand(client *c) {
         replicationGetSlaveName(c));
 
     /* Try a partial resynchronization if this is a PSYNC command.
-     * If it fails, we continue with usual full resynchronization, however
-     * when this happens masterTryPartialResynchronization() already
-     * replied with:
+     * 如果收到 psync 命令，会优先尝试做部分重同步。
+     * 
+     * If it fails, we continue with usual full resynchronization, 
+     * 如果失败了，我们继续通常的全量重同步。
+     * 
+     * however when this happens masterTryPartialResynchronization() already replied with:
      *
      * +FULLRESYNC <replid> <offset>
      *
@@ -1310,17 +1323,24 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
 }
 
 /* Change the current instance replication ID with a new, random one.
- * This will prevent successful PSYNCs between this master and other
- * slaves, so the command should be called when something happens that
- * alters the current story of the dataset. */
+ * 将当前实例的 replication ID 修改成一个新的随机值
+ *
+ * This will prevent successful PSYNCs between this master and other slaves, 
+ * 这将阻碍该 master 与其他 slaves 之间的 PSYNCs。
+ * 
+ * so the command should be called when something happens that alters the current story of the dataset. 
+ * 所以，当发生改变数据集的事情时，应该调用该命令。
+ * */
 void changeReplicationId(void) {
     getRandomHexChars(server.replid,CONFIG_RUN_ID_SIZE);
     server.replid[CONFIG_RUN_ID_SIZE] = '\0';
 }
 
-/* Clear (invalidate) the secondary replication ID. This happens, for
- * example, after a full resynchronization, when we start a new replication
- * history. */
+/* Clear (invalidate) the secondary replication ID. 
+ * This happens, for example, after a full resynchronization, when we start a new replication history. 
+ * 清空第二 replication ID。
+ * 很多情况下，都需要做该操作，例如，一次完全 resynchronization 后，当我们要开始一段新的主从关系时。
+ * */
 void clearReplicationId2(void) {
     memset(server.replid2,'0',sizeof(server.replid));
     server.replid2[CONFIG_RUN_ID_SIZE] = '\0';
@@ -1482,7 +1502,7 @@ void disklessLoadRestoreBackups(redisDb *backup, int restore, int empty_db_flags
 /* Asynchronously read the SYNC payload we receive from a master */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024*1024*8) /* 8 MB */
 void readSyncBulkPayload(connection *conn) {
-    char buf[PROTO_IOBUF_LEN];
+    char buf[PROTO_IOBUF_LEN]; // 16K
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
     redisDb *diskless_load_backup = NULL;
@@ -1648,8 +1668,9 @@ void readSyncBulkPayload(connection *conn) {
      *
      * 1. The replica is using diskless replication, that is, it reads data
      *    directly from the socket to the Redis memory, without using
-     *    a temporary RDB file on disk. In that case we just block and
-     *    read everything from the socket.
+     *    a temporary RDB file on disk. 
+     *    In that case we just block and read everything from the socket.
+     *    无磁盘化 replication，不使用临时 rdb 文件做中转，直接从 socket 读数据到 memory。
      *
      * 2. Or when we are done reading from the socket to the RDB file, in
      *    such case we want just to read the RDB file in memory. */
@@ -1692,6 +1713,8 @@ void readSyncBulkPayload(connection *conn) {
         connRecvTimeout(conn, server.repl_timeout*1000);
         startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION);
 
+        
+        // 读完 RDB 文件
         if (rdbLoadRio(&rdb,RDBFLAGS_REPLICATION,&rsi) != C_OK) {
             /* RDB loading failed. */
             stopLoading(0);
@@ -1830,6 +1853,8 @@ void readSyncBulkPayload(connection *conn) {
      * accumulate the backlog regardless of the fact they have sub-slaves
      * or not, in order to behave correctly if they are promoted to
      * masters after a failover. */
+     
+     // 为了切换成 master 后可以做 psync，slave 也需要有 backlog
     if (server.repl_backlog == NULL) createReplicationBacklog();
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
@@ -2524,6 +2549,7 @@ void replicationSetMaster(char *ip, int port) {
 }
 
 /* Cancel replication, setting the instance as a master itself. */
+// 取消复制关系，将该实例设置为 master
 void replicationUnsetMaster(void) {
     if (server.masterhost == NULL) return; /* Nothing to do. */
 
@@ -2542,10 +2568,15 @@ void replicationUnsetMaster(void) {
      * (that was inherited from the master at synchronization time) is
      * used as secondary ID up to the current offset, and a new replication
      * ID is created to continue with a new replication history.
+     * 当一个 slave 变为 master 时，当前 replication ID（同步时从 master 继承的）用作 as secondary ID，
+     * 直到当前 offset，会创建一个新的 replication ID 来继续一段新的复制关系。
      *
      * NOTE: this function MUST be called after we call
      * freeClient(server.master), since there we adjust the replication
-     * offset trimming the final PINGs. See Github issue #7320. */
+     * offset trimming the final PINGs. See Github issue #7320. 
+     * 注意：这个函数必须在 freeClient(server.master) 之后调用，
+     * 因为在那里我们调整了复制偏移量来修剪最终的 PING。
+     * */
     shiftReplicationId();
     /* Disconnecting all the slaves is required: we need to inform slaves
      * of the replication ID change (see shiftReplicationId() call). However
@@ -2596,6 +2627,7 @@ void replicationHandleMasterDisconnection(void) {
      * the slaves only if we'll have to do a full resync with our master. */
 }
 
+// 由 3.2 版本的 slaveofCommand 命令改名而来
 void replicaofCommand(client *c) {
     /* SLAVEOF is not allowed in cluster mode as replication is automatically
      * configured using the current address of the master node. */

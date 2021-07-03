@@ -5046,6 +5046,7 @@ void restoreCommand(client *c) {
         deleted = dbDelete(c->db,key);
 
     if (ttl && !absttl) ttl+=mstime();
+    // 过期了
     if (ttl && checkAlreadyExpired(ttl)) {
         if (deleted) {
             rewriteClientCommandVector(c,2,shared.del,key);
@@ -5191,7 +5192,7 @@ void migrateCommand(client *c) {
     migrateCachedSocket *cs;
     int copy = 0, replace = 0, j;
     char *username = NULL;
-    char *password = NULL;
+    char *password = NULL; // 使用 username 和 passwd 鉴权，从 redis 6 版本开始支持
     long timeout;
     long dbid;
     robj **ov = NULL; /* Objects to migrate. */
@@ -5306,6 +5307,10 @@ try_again:
         serverAssertWithInfo(c,NULL,rioWriteBulkLongLong(&cmd,dbid));
     }
 
+    /*
+     * 序列化大 key 需要花费一些时间，
+     * 因此通过 lookupKey() 函数找到的未过期的 key，可能一会就过期了。
+     */
     int non_expired = 0; /* Number of keys that we'll find non expired.
                             Note that serializing large keys may take some time
                             so certain keys that were found non expired by the
@@ -5316,9 +5321,9 @@ try_again:
         long long ttl = 0;
         long long expireat = getExpire(c->db,kv[j]);
 
-        if (expireat != -1) {
+        if (expireat != -1) { 
             ttl = expireat-mstime();
-            if (ttl < 0) {
+            if (ttl < 0) { // 忽略掉已经过期的 key，不会迁移到对端
                 continue;
             }
             if (ttl < 1) ttl = 1;
@@ -5337,6 +5342,7 @@ try_again:
                 rioWriteBulkString(&cmd,"RESTORE-ASKING",14));
         else
             serverAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,"RESTORE",7));
+        
         serverAssertWithInfo(c,NULL,sdsEncodedObject(kv[j]));
         serverAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,kv[j]->ptr,
                 sdslen(kv[j]->ptr)));
@@ -5344,7 +5350,7 @@ try_again:
 
         /* Emit the payload argument, that is the serialized object using
          * the DUMP format. */
-        createDumpPayload(&payload,ov[j],kv[j]);
+        createDumpPayload(&payload,ov[j],kv[j]); // key 参数在 moudle 和 stream 类型时用到
         serverAssertWithInfo(c,NULL,
             rioWriteBulkString(&cmd,payload.io.buffer.ptr,
                                sdslen(payload.io.buffer.ptr)));

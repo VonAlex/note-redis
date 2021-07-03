@@ -80,15 +80,17 @@ void createReplicationBacklog(void) {
     server.repl_backlog_histlen = 0;
     server.repl_backlog_idx = 0;
     /* When a new backlog buffer is created, we increment the replication
-     * offset by one to make sure we'll not be able to PSYNC with any
-     * previous slave. This is needed because we avoid incrementing the
-     * master_repl_offset if no backlog exists nor slaves are attached. */
+     * offset by one to make sure we'll not be able to PSYNC with any previous slave. 
+     *
+     * This is needed because we avoid incrementing the
+     * master_repl_offset if no backlog exists nor slaves are attached.
+     * 这是必要的，因为没有 backlog 和 slave 的话，不会增加 master_repl_offset。
+     */
     // 避免之前使用过 backlog 的 slave 引发错误的 PSYNC 操作
     server.master_repl_offset++;
 
     /* We don't have any data inside our buffer, but virtually the first
-     * byte we have is the next byte that will be generated for the
-     * replication stream. */
+     * byte we have is the next byte that will be generated for the replication stream. */
     // 尽管没有数据，但事实上，第一个字节的逻辑位置是 master_repl_offset 的下一个字节
     server.repl_backlog_off = server.master_repl_offset+1;
 }
@@ -100,7 +102,7 @@ void createReplicationBacklog(void) {
  * the most recent bytes, or the same data and more free space in case the
  * buffer is enlarged). */
 void resizeReplicationBacklog(long long newsize) {
-    if (newsize < CONFIG_REPL_BACKLOG_MIN_SIZE)
+    if (newsize < CONFIG_REPL_BACKLOG_MIN_SIZE) // 最小 16k
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
     if (server.repl_backlog_size == newsize) return;
 
@@ -111,6 +113,8 @@ void resizeReplicationBacklog(long long newsize) {
          * The reason is that copying a few gigabytes adds latency and even
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
+        // 调整 backlog 大小会刷掉老的 buffer，重新分配一个新的空 buffer
+        // 原因是复制几 GB 的数据会增加耗时，在释放旧 buffer 内存之前，需要分配新的空间
         zfree(server.repl_backlog);
         server.repl_backlog = zmalloc(server.repl_backlog_size);
         server.repl_backlog_histlen = 0;
@@ -141,7 +145,7 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     // 环形 buffer ，每次 write 尽可能多的数据，并在 idx 指针到达 tail 后重置到 header
     while(len) {
 
-        // repl_backlog 剩余长度足以容纳要写入的数据时，写入长度为 len
+        // repl_backlog 剩余长度还能容纳多长的数据
         size_t thislen = server.repl_backlog_size - server.repl_backlog_idx;
         if (thislen > len) thislen = len;
 
@@ -163,11 +167,12 @@ void feedReplicationBacklog(void *ptr, size_t len) {
         server.repl_backlog_histlen += thislen;
     }
     // repl_backlog 是环形的，所以 repl_backlog_histlen 不可能超过 repl_backlog_size
+    // 也就是说最多只能有 server.repl_backlog_size 长度的 backlog 可用
     if (server.repl_backlog_histlen > server.repl_backlog_size)
         server.repl_backlog_histlen = server.repl_backlog_size;
 
     /* Set the offset of the first byte we have in the backlog. */
-    // backlog 里数据第一个字节的 offset
+    // backlog 里第一个可用字节的全局偏移量
     server.repl_backlog_off = server.master_repl_offset -
                               server.repl_backlog_histlen + 1;
 }
@@ -189,6 +194,11 @@ void feedReplicationBacklogWithObject(robj *o) {
     feedReplicationBacklog(p,len);
 }
 
+/* Propagate write commands to slaves, and populate the replication backlog as well.
+ * 
+ * This function is used if the instance is a master: // master 才会调用这个函数
+ * we use the commands received by our clients in order to create the replication stream. 
+ */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -221,6 +231,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
 
         /* Add the SELECT command into the backlog. */
+        // 将 SELECT 命令放到 backlog 里
         if (server.repl_backlog) feedReplicationBacklogWithObject(selectcmd);
 
         /* Send it to slaves. */
@@ -282,7 +293,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
         for (j = 0; j < argc; j++)
-            addReplyBulk(slave,argv[j]);
+            addReplyBulk(slave,argv[j]); // 发送给 slave
     }
 }
 
@@ -366,7 +377,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 
     /* Feed slave with data. Since it is a circular buffer we have to
      * split the reply in two parts if we are cross-boundary. */
-    len = server.repl_backlog_histlen - skip; //  把有效数据发出去
+    len = server.repl_backlog_histlen - skip; //  把 len 长度的有效数据发出去
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
     while(len) {
         long long thislen =
@@ -462,14 +473,16 @@ int masterTryPartialResynchronization(client *c) {
      * there is no way to continue. */
     if (strcasecmp(master_runid, server.runid)) {
         /* Run id "?" is used by slaves that want to force a full resync. */
-        if (master_runid[0] != '?') { // 第一次发送 psync，进行 fullsync
+        if (master_runid[0] != '?') { 
             serverLog(LL_NOTICE,"Partial resynchronization not accepted: "
                 "Runid mismatch (Client asked for runid '%s', my runid is '%s')",
                 master_runid, server.runid);
         } else {
+           
             serverLog(LL_NOTICE,"Full resync requested by slave %s",
                 replicationGetSlaveName(c));
         }
+         // 第一次发送 psync，进行 fullsync
         goto need_full_resync;
     }
 
@@ -477,6 +490,7 @@ int masterTryPartialResynchronization(client *c) {
     if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
        C_OK) goto need_full_resync;
        
+    // 没有 backlog 或
     // psync_offset 不在 backlog 范围内，需要进行 full resync
     if (!server.repl_backlog ||
         psync_offset < server.repl_backlog_off ||
@@ -1910,6 +1924,8 @@ void replicationSetMaster(char *ip, int port) {
     server.masterhost = sdsnew(ip);
     server.masterport = port;
     if (server.master) freeClient(server.master); // 如果原来有 master了，需要释放掉
+    
+    // 要重新设置主从关系了，数据会刷新，阻塞在这里的 client 也就没有意义了
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
 
     /* 释放掉所有的 slave，让它们重新连 */
@@ -2081,12 +2097,17 @@ void replicationSendAck(void) {
 /* In order to implement partial synchronization we need to be able to cache
  * our master's client structure after a transient disconnection.
  * It is cached into server.cached_master and flushed away using the following
- * functions. */
+ * functions. 
+ * 为了完成部分同步，我们需要在一个短暂断链后缓存下我们 master 的 client 结构。
+ * 缓存到 server.cached_master 结构，并使用以下函数冲掉。
+ * */
 
 /* This function is called by freeClient() in order to cache the master
  * client structure instead of destryoing it. freeClient() will return
  * ASAP after this function returns, so every action needed to avoid problems
  * with a client that is really "suspended" has to be done by this function.
+ * 该函数被 freeClient() 调用，用于 cache master client 结构，而非销毁它。
+ * freeClient() 在该函数返回后会立即返回。
  *
  * The other functions that will deal with the cached master are:
  *

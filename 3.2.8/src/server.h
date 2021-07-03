@@ -297,7 +297,9 @@ typedef long long mstime_t; /* millisecond time type. */
                                     three: normal, slave, pubsub. */
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
- * what to do next. */
+ * what to do next. 
+ * 复制状态机
+ */
 #define REPL_STATE_NONE 0 /* No active replication */
 #define REPL_STATE_CONNECT 1 /* Must connect to master */
 #define REPL_STATE_CONNECTING 2 /* Connecting to master */
@@ -894,6 +896,7 @@ struct redisServer {
     int syslog_enabled;             /* Is syslog enabled? */
     char *syslog_ident;             /* Syslog ident */
     int syslog_facility;            /* Syslog facility */
+    
     /* Replication (master) */
     int slaveseldb;                 /* Last SELECTed DB in replication output */
     long long master_repl_offset;   /* Global replication offset */
@@ -909,6 +912,7 @@ struct redisServer {
 
     // 最新数据的截止位置，更新的数据总是从这里开始写入到 repl_backlog 中
     // 从这里写
+    // 复制缓冲区中存储的命令请求最后一个字节索引位置
     long long repl_backlog_idx;     /* Backlog circular buffer current offset */
 
     // repl_backlog 中 idx 变量所指的位置的 offset
@@ -990,8 +994,11 @@ int repl_transfer_s;     /* Slave -> Master SYNC socket */ // 主从 tcp 通信 
     /* time cache */
     time_t unixtime;        /* Unix time sampled every cron cycle. */
     long long mstime;       /* Like 'unixtime' but with milliseconds resolution. */
+
     /* Pubsub */
+    // 普通模式收集某个 channel 都有哪些 client 订阅
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
+    // 模糊模式收集 client
     list *pubsub_patterns;  /* A list of pubsub_patterns */
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
@@ -1008,7 +1015,7 @@ int repl_transfer_s;     /* Slave -> Master SYNC socket */ // 主从 tcp 通信 
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
     client *lua_client;   /* The "fake client" to query Redis from Lua */
     client *lua_caller;   /* The client running EVAL right now, or NULL */
-    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
+    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */ // 保存 lua 脚本
     mstime_t lua_time_limit;  /* Script timeout in milliseconds */
     mstime_t lua_time_start;  /* Start time of script, milliseconds time */
     int lua_write_dirty;  /* True if a write command was called during the

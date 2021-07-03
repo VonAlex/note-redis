@@ -302,11 +302,11 @@ int dictRehash(dict *d, int n) { // 渐进式 rehash ，本次迁移 n 个 slot
     }
 
     /* Check if we already rehashed the whole table... */
-    // 如果 ht[0] 桶里 0 key 了，那么释放掉 ht[0] 的内存，ht[0] 指向 ht[1]，恢复dict 的 rehashidx 标记
+    // 如果 ht[0] 桶里没有 key 了，释放掉 ht[0] 的内存，ht[0] 指向 ht[1]
     if (d->ht[0].used == 0) {
         zfree(d->ht[0].table); // 释放内存
         d->ht[0] = d->ht[1];
-        _dictReset(&d->ht[1]);
+        _dictReset(&d->ht[1]); 
         d->rehashidx = -1;
         return 0;
     }
@@ -476,15 +476,15 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
 
     if (d->ht[0].size == 0) return DICT_ERR; /* d->ht[0].table is NULL */
     if (dictIsRehashing(d)) _dictRehashStep(d); // 执行渐进式 rehash
-    h = dictHashKey(d, key);
+    h = dictHashKey(d, key); // key 的 hash 值
 
     for (table = 0; table <= 1; table++) {
-        idx = h & d->ht[table].sizemask;
+        idx = h & d->ht[table].sizemask; // 在哪个 hash 桶
         he = d->ht[table].table[idx];
         prevHe = NULL;
         while(he) {
             if (key==he->key || dictCompareKeys(d, key, he->key)) { // 找到这个 key
-                if (prevHe) // 是不是该 hash slot 的第一个元素
+                if (prevHe) // 是否是该哈希桶第一个元素
                     prevHe->next = he->next;
                 else
                     d->ht[table].table[idx] = he->next;
@@ -492,7 +492,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
                 }
-                zfree(he);
+                zfree(he); // 释放掉这个 entry
                 d->ht[table].used--;
                 return DICT_OK;
             }

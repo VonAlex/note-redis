@@ -491,7 +491,7 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     buf[len++] = '\n';
     dst = sdscatlen(dst,buf,len);
 
-   //  通过 len，重复使用 buf 数组，将 argv 转换成 redis 协议格式，append 到 dst 后
+   // 通过 len，重复使用 buf 数组，将 argv 转换成 redis 协议格式，append 到 dst 后
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';

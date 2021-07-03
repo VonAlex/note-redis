@@ -832,9 +832,12 @@ void freeClient(client *c) {
 
     /* If it is our master that's beging disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
-     *
+     * 如果是我们的 master 要断开连接，应该确保缓存 client 状态，以便做部分重同步。
+     * 
      * Note that before doing this we make sure that the client is not in
-     * some unexpected state, by checking its flags. */
+     * some unexpected state, by checking its flags. 
+     * 注意，在缓存之前，需要确保处理 client 不处于一些非预期的状态
+     * */
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
@@ -848,6 +851,7 @@ void freeClient(client *c) {
     }
 
     /* Log link disconnection with slave */
+    // slave 而非 monitor 
     if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
         serverLog(LL_WARNING,"Connection with slave %s lost.",
             replicationGetSlaveName(c));
