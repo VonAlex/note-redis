@@ -4777,11 +4777,16 @@ void createDumpPayload(rio *payload, robj *o) {
     unsigned char buf[2];
     uint64_t crc;
 
-    /* Serialize the object in a RDB-like format. It consist of an object type
-     * byte followed by the serialized object. This is understood by RESTORE. */
+    /* Serialize the object in a RDB-like format.
+     * 将 object 序列化成 RDB 格式。
+     *
+     * It consist of an object type byte followed by the serialized object. 
+     * 它由一个 object 类型字节和随后的序列化 object 组成。
+     * 
+     * This is understood by RESTORE. */
     rioInitWithBuffer(payload,sdsempty());
-    serverAssert(rdbSaveObjectType(payload,o));
-    serverAssert(rdbSaveObject(payload,o));
+    serverAssert(rdbSaveObjectType(payload,o)); // 先存类型
+    serverAssert(rdbSaveObject(payload,o)); // 再存序列化 object
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -4791,6 +4796,7 @@ void createDumpPayload(rio *payload, robj *o) {
      */
 
     /* RDB version */
+    // 小端序
     buf[0] = RDB_VERSION & 0xff;
     buf[1] = (RDB_VERSION >> 8) & 0xff;
     payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr,buf,2);
@@ -4798,6 +4804,7 @@ void createDumpPayload(rio *payload, robj *o) {
     /* CRC64 */
     crc = crc64(0,(unsigned char*)payload->io.buffer.ptr,
                 sdslen(payload->io.buffer.ptr));
+    // 小端序
     memrev64ifbe(&crc);
     payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr,&crc,8);
 }
@@ -4894,9 +4901,12 @@ void restoreCommand(client *c) {
         return;
     }
 
+
     /* Remove the old key if needed. */
     if (replace) dbDelete(c->db,c->argv[1]);
 
+    // 5.0 版本优化：如果 key 此时已经过期，那么下面步骤就没必要了，产生一个 del 给 aof 和 repl
+    
     /* Create the key and set the TTL if any */
     dbAdd(c->db,c->argv[1],obj);
     if (ttl) setExpire(c->db,c->argv[1],mstime()+ttl);
@@ -5132,11 +5142,11 @@ try_again:
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
         long long expireat = getExpire(c->db,kv[j]);
-
         if (expireat != -1) {
             ttl = expireat-mstime(); // 过期时间转换成相对 ttl
-            if (ttl < 1) ttl = 1;
+            if (ttl < 1) ttl = 1; // 不足 1ms 的按照 1ms 计算
         }
+
         serverAssertWithInfo(c,NULL,rioWriteBulkCount(&cmd,'*',replace ? 5 : 4));
         if (server.cluster_enabled)
             serverAssertWithInfo(c,NULL,
@@ -5243,7 +5253,7 @@ try_again:
          * this only for the keys for which we received an acknowledgement
          * from the receiving Redis server, by using the del_idx index.
          *
-         * 为了主从复制和 AOF，把 MIGRATE 转换成 DEL 命令。
+         * 主从复制和 AOF，把 MIGRATE 转换成 DEL 命令。
          * 通过 del_idx，我们仅收集那些从对端返回 ack 的 key（不是所有的）
          * */
         if (del_idx > 1) {

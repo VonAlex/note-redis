@@ -195,9 +195,11 @@ void *bioProcessBackgroundJobs(void *arg) {
      * can work reliably.
      * 设置线程可以被其他线程调用pthread_cancel函数取消/终止
      * （其他线程发来 cancel 请求）
-     * */
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL); // 设置本线程对cancel信号的反应
-    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);// 收到信号后继续运行至下一个取消点再退出，默认是立即退出，与 PTHREAD_CANCEL_ENABLE 配合使用
+     */
+    // 设置本线程对cancle信号的反应
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL); 
+    // 收到信号后继续运行至下一个取消点再退出，默认是立即退出，与 PTHREAD_CANCEL_ENABLE 配合使用
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
     pthread_mutex_lock(&bio_mutex[type]);
     /* Block SIGALRM so we are sure that only the main thread will

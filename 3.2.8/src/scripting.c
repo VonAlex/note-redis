@@ -1146,8 +1146,9 @@ int redis_math_randomseed (lua_State *L) {
 int luaCreateFunction(client *c, lua_State *lua, char *funcname, robj *body) {
     sds funcdef = sdsempty();
 
+    // funcdef 构造 lua 函数
     funcdef = sdscat(funcdef,"function ");
-    funcdef = sdscatlen(funcdef,funcname,42);
+    funcdef = sdscatlen(funcdef,funcname,42); // f_<hex sha1 sum>
     funcdef = sdscatlen(funcdef,"() ",3);
     funcdef = sdscatlen(funcdef,body->ptr,sdslen(body->ptr));
     funcdef = sdscatlen(funcdef,"\nend",4);
@@ -1160,7 +1161,8 @@ int luaCreateFunction(client *c, lua_State *lua, char *funcname, robj *body) {
         return C_ERR;
     }
     sdsfree(funcdef);
-    if (lua_pcall(lua,0,0,0)) {
+
+    if (lua_pcall(lua,0,0,0)) { // 调用函数
         addReplyErrorFormat(c,"Error running script (new function): %s\n",
             lua_tostring(lua,-1));
         lua_pop(lua,1);
@@ -1171,6 +1173,7 @@ int luaCreateFunction(client *c, lua_State *lua, char *funcname, robj *body) {
      * so that we can replicate / write in the AOF all the
      * EVALSHA commands as EVAL using the original script. */
     {
+        // 将 lua 脚本保存下来
         int retval = dictAdd(server.lua_scripts,
                              sdsnewlen(funcname+2,40),body);
         serverAssertWithInfo(c,NULL,retval == DICT_OK);
@@ -1446,7 +1449,7 @@ void scriptCommand(client *c) {
         funcname[1] = '_';
         sha1hex(funcname+2,c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
         sha = sdsnewlen(funcname+2,40);
-        if (dictFind(server.lua_scripts,sha) == NULL) {
+        if (dictFind(server.lua_scripts,sha) == NULL) { // 找不到
             if (luaCreateFunction(c,server.lua,funcname,c->argv[2])
                     == C_ERR) {
                 sdsfree(sha);
@@ -1455,6 +1458,7 @@ void scriptCommand(client *c) {
         }
         addReplyBulkCBuffer(c,funcname+2,40);
         sdsfree(sha);
+        // lua 脚本需要传播
         forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"kill")) {
         if (server.lua_caller == NULL) {

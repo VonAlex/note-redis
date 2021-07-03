@@ -191,6 +191,8 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
 /* This is a special version of dbAdd() that is used only when loading
  * keys from the RDB file: the key is passed as an SDS string that is
  * retained by the function (and not freed by the caller).
+ * dbAdd() 的特殊版本，仅仅在从 RDB 文件中加载 key 时使用。
+ * key 是 sds 字符串，由本函数持有，不会被 caller 释放。
  *
  * Moreover this function will not abort if the key is already busy, to
  * give more control to the caller, nor will signal the key as ready

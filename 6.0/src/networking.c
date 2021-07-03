@@ -2990,9 +2990,8 @@ pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 _Atomic unsigned long io_threads_pending[IO_THREADS_MAX_NUM];
 int io_threads_op;      /* IO_THREADS_OP_WRITE or IO_THREADS_OP_READ. */
 
-/* This is the list of clients each thread will serve when threaded I/O is
- * used. We spawn io_threads_num-1 threads, since one is the main thread
- * itself. */
+/* This is the list of clients each thread will serve when threaded I/O is used. 
+ * We spawn io_threads_num-1 threads, since one is the main thread itself. */
 list *io_threads_list[IO_THREADS_MAX_NUM];
 
 void *IOThreadMain(void *myid) {
@@ -3038,6 +3037,8 @@ void *IOThreadMain(void *myid) {
                 serverPanic("io_threads_op value is unknown");
             }
         }
+        // 先产生 io_threads_list 任务才能进入该线程处理，
+        // 因此，主线程与 io 线程不会出现同时操作 io_threads_list 变量和 io_threads_pending 变量的情况
         listEmpty(io_threads_list[id]);
         io_threads_pending[id] = 0;
 

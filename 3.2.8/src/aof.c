@@ -491,7 +491,7 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     buf[len++] = '\n';
     dst = sdscatlen(dst,buf,len);
 
-   //  通过 len，重复使用 buf 数组，将 argv 转换成 redis 协议格式，append 到 dst 后
+   // 通过 len，重复使用 buf 数组，将 argv 转换成 redis 协议格式，append 到 dst 后
     for (j = 0; j < argc; j++) {
         o = getDecodedObject(argv[j]);
         buf[0] = '$';
@@ -1127,6 +1127,7 @@ int rewriteAppendOnlyFile(char *filename) {
             expiretime = getExpire(db,&key);
 
             // 如果这个 key 已经过期了，那么跳过它
+            // 会造成主从 key 数量的一致
             if (expiretime != -1 && expiretime < now) continue;
 
              // 根据值的对象类型，将键值对写到AOF文件中

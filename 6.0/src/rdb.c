@@ -2168,6 +2168,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             if ((qword = rdbLoadLen(rdb,NULL)) == RDB_LENERR) goto eoferr;
             lru_idle = qword;
             continue; /* Read next opcode. */
+
+        // 读到 rdb 文件结尾了
         } else if (type == RDB_OPCODE_EOF) {
             /* EOF: End of file, exit the main loop. */
             break;
@@ -2316,11 +2318,15 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             goto eoferr;
         }
 
-        /* Check if the key already expired. This function is used when loading
-         * an RDB file from disk, either at startup, or when an RDB was
-         * received from the master. In the latter case, the master is
-         * responsible for key expiry. If we would expire keys here, the
-         * snapshot taken by the master may not be reflected on the slave.
+        /* Check if the key already expired. 
+         * 
+         * 遇到解析 rdb 场景，都会使用该函数
+         * This function is used when loading an RDB file from disk, either at startup, 
+         * or when an RDB was received from the master. 
+         * 
+         * In the latter case, the master is responsible for key expiry. 
+         * 
+         * If we would expire keys here, the snapshot taken by the master may not be reflected on the slave.
          * Similarly if the RDB is the preamble of an AOF file, we want to
          * load all the keys as they are, since the log of operations later
          * assume to work in an exact keyspace state. */
@@ -2344,6 +2350,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                     dbSyncDelete(db,&keyobj);
                     dbAddRDBLoad(db,key,val);
                 } else {
+                    // key 重复了
                     serverLog(LL_WARNING,
                         "RDB has duplicated key '%s' in DB %d",key,db->id);
                     serverPanic("Duplicated key found in RDB file");

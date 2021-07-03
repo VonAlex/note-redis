@@ -679,10 +679,14 @@ void tryResizeHashTables(int dbid) {
         dictResize(server.db[dbid].expires);
 }
 
-/* Our hash table implementation performs rehashing incrementally while
- * we write/read from the hash table. Still if the server is idle, the hash
- * table will use two tables for a long time. So we try to use 1 millisecond
- * of CPU time at every call of this function to perform some rehahsing.
+/* Our hash table implementation performs rehashing incrementally while we write/read from the hash table. 
+ * Still if the server is idle, the hash table will use two tables for a long time.
+ * So we try to use 1 millisecond of CPU time at every call of this function to perform some rehahsing.
+ * 
+ * 在我们的哈希表实现中，rehash 会在我们读写哈希表时渐进完成。
+ * 即使 server 处于空闲状态，哈希表仍将长时间使用两个表。
+ * 因此，我们尝试在每次调用该函数时，使用 1 毫秒的 CPU 时间来做一些 rehash。
+ * 
  *
  * The function returns 1 if some rehashing was performed, otherwise 0
  * is returned. */
@@ -723,17 +727,23 @@ void updateDictResizePolicy(void) {
 /* Helper function for the activeExpireCycle() function.
  * This function will try to expire the key that is stored in the hash table
  * entry 'de' of the 'expires' hash table of a Redis database.
+ * 这个函数将试着 expire 存储在 redis 数据库的 'expires' 哈希表的 'de' 项中的 key
  *
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ * 如果找到的 key 是过期的，那么从 db 中删掉它，并返回 1.
+ * 否则，不执行任何操作，并返回 0.
  *
  * When a key is expired, server.stat_expiredkeys is incremented.
+ * 当一个 key 过期了，那么 server.stat_expiredkeys 计数器需要 + 1
  *
  * The parameter 'now' is the current time in milliseconds as is passed
- * to the function to avoid too many gettimeofday() syscalls. */
+ * to the function to avoid too many gettimeofday() syscalls. 
+ * 'now' 参数是现在的毫秒时间，通过参数传过来，是为了避免过多的 gettimeofday() 系统调用
+ */
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
-    if (now > t) {
+    if (now > t) { // 过期了 
         sds key = dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
 
@@ -753,21 +763,18 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
  * will use few CPU cycles if there are few expiring keys, otherwise
  * it will get more aggressive to avoid that too much memory is used by
  * keys that can be removed from the keyspace.
- *
- * 尝试删除一些过期的 key。使用到的算法是自适应的，如果几乎没有过期的 key，它使用少量的 CPU 周期，
+ * 尝试删除一些过期的 key。使用到的算法是自适应的，如果几乎没有过期的 key，几乎用不到 CPU，
  * 否则，为了避免过期 key 过多占用内存，将会更积极地从数据库删除它们
  *
- * No more than CRON_DBS_PER_CALL databases ar tested at every
+ * No more than CRON_DBS_PER_CALL databases are tested at every
  * iteration.
- *
  * 每轮检查的数据库个数不超过 CRON_DBS_PER_CALL(16)
  *
  * This kind of call is used when Redis detects that timelimit_exit is
  * true, so there is more work to do, and we do it more incrementally from
  * the beforeSleep() function of the event loop.
- *
- * 当 Redis 检测到 timelimit_exit 是 true 时将使用这种调用，所以有更多的工作要做。
- * 我们在 event loop 的 beforeSleep() 函数中将会做更多的调用。
+ * 当 Redis 检测到 timelimit_exit 是 true 时，将使用到这个函数，所以有更多的工作要做。
+ * 我们在 event loop 的 beforeSleep() 函数中将会增加调用。
  *
  * Expire cycle type:
  * 过期循环类型：
@@ -775,41 +782,41 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
  * If type is ACTIVE_EXPIRE_CYCLE_FAST the function will try to run a
  * "fast" expire cycle that takes no longer than EXPIRE_FAST_CYCLE_DURATION
  * microseconds, and is not repeated again before the same amount of time.
- *
- * 遇到 ACTIVE_EXPIRE_CYCLE_FAST 类型调用，将跑一个 fast 过期循环。
- * 这种循环执行时间不超过 EXPIRE_FAST_CYCLE_DURATION 微秒，并在这么多微秒内不会重试
+ * ACTIVE_EXPIRE_CYCLE_FAST 类型调用，将跑一个 fast 过期循环。
+ * 这种循环执行时间不超过 EXPIRE_FAST_CYCLE_DURATION 微秒，并在相同时间内不会重试
  *
  * If type is ACTIVE_EXPIRE_CYCLE_SLOW, that normal expire cycle is
  * executed, where the time limit is a percentage of the REDIS_HZ period
  * as specified by the REDIS_EXPIRELOOKUPS_TIME_PERC define.
- *
- * 遇到 ACTIVE_EXPIRE_CYCLE_SLOW 类型调用，将跑一个正常的过期循环。
+ * ACTIVE_EXPIRE_CYCLE_SLOW 类型调用，将跑一个正常的过期循环。
  * 执行时间限制是一个 REDIS_HZ 周期的百分比，百分比由 REDIS_EXPIRELOOKUPS_TIME_PERC 定义
  *
- * */
+ */
 
-// 过期键周期性删除
+// 主动过期 key cycle
 void activeExpireCycle(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     static unsigned int current_db = 0; /* Last DB tested. */
-    static int timelimit_exit = 0;      /* Time limit hit in previous call? 检查是否已经超时 */
-    static long long last_fast_cycle = 0; /* When last fast cycle ran. */
+    static int timelimit_exit = 0;      /* Time limit hit in previous call? 上一次调用是否超时 */
+    static long long last_fast_cycle = 0; /* When last fast cycle ran. 上一次 fast cycel 跑的时间 */
 
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL; // 默认 16
     long long start = ustime(), timelimit;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
-        /* Don't start a fast cycle if the previous cycle did not exited
-         * for time limt. Also don't repeat a fast cycle for the same period
-         * as the fast cycle total duration itself. */
-        // 如果上一次循环不是因为超时结束的，那么这一次没必要跑 fast 循环（也就是说，时间够用）
-        // 不要在上一次跑过 fast 之后的 2 倍 ACTIVE_EXPIRE_CYCLE_FAST_DURATION 时间内再跑一次 fast 循环
+        /* Don't start a fast cycle if the previous cycle did not exited for time limt.
+         * Also don't repeat a fast cycle for the same period
+         * as the fast cycle total duration itself. 
+         *
+         */
+        // 如果上一次 cycle 不是因为超时而结束的，那么这一次没必要跑 fast cycle（即，slow cycle 时间够用）
+        // 连续两次 fast cycle 的时间必须超过 2 倍的 ACTIVE_EXPIRE_CYCLE_FAST_DURATION
         // 以下这两个判断，其实是对应上面解释里的“自适应”
         if (!timelimit_exit) return;
         if (start < last_fast_cycle + ACTIVE_EXPIRE_CYCLE_FAST_DURATION*2) return;
-        last_fast_cycle = start;
+        last_fast_cycle = start; // 记录 fast cycle 开始的时间
     }
 
     /* We usually should test CRON_DBS_PER_CALL per iteration, with
@@ -831,20 +838,25 @@ void activeExpireCycle(int type) {
     if (dbs_per_call > server.dbnum || timelimit_exit)
         dbs_per_call = server.dbnum;
 
-    /* We can use at max ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC percentage of CPU time
-     * per iteration. Since this function gets called with a frequency of
-     * server.hz times per second, the following is the max amount of
-     * microseconds we can spend in this function.
-     * 每次循环，最多可以使用 ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 百分比的 CPU 时间
-     * */
+    /* We can use at max ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC percentage of CPU time per iteration. 
+     * Since this function gets called with a frequency of server.hz times per second, 
+     * the following is the max amount of microseconds we can spend in this function.
+     * 这个函数调用频率为每秒 server.hz 次，
+     * 下面计算的是，在每次指向该函数时所花费的最大 us 数。
+     * 我们在每次 iteration 中最多花费 ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 比例的 CPU 时间
+     */
+    // ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC / 100 表示百分比
+    // 1000 / server.hz 表示 ms 单位的函数执行周期
+    // 1000 * 1000 / server.hz 表示 us 单位的函数执行周期
+    // 两者相乘，获得执行周期的百分比
     timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
-    if (type == ACTIVE_EXPIRE_CYCLE_FAST)
-        timelimit = ACTIVE_EXPIRE_CYCLE_FAST_DURATION; /* in microseconds. 1000 us */
+    if (type == ACTIVE_EXPIRE_CYCLE_FAST) // fast cycle 只执行 1000 us
+        timelimit = ACTIVE_EXPIRE_CYCLE_FAST_DURATION; /* in microseconds. */
 
-    // 遍历指定数量的数据库
+    // 抽样淘汰 expire 中的 key，直到过期key在抽样中占比 < 25%，或者时间超过了 limit
     // current_db 上一次的数据库序号
     for (j = 0; j < dbs_per_call; j++) {
         int expired;
@@ -863,20 +875,20 @@ void activeExpireCycle(int type) {
             int ttl_samples;
 
             /* If there is nothing to expire try next DB ASAP. */
-            // 如果没有过期的 key，那么可以直接返回了
+            // 如果没有过期 key，就没不要继续扫描了，continue 下一个 db
             if ((num = dictSize(db->expires)) == 0) {
                 db->avg_ttl = 0;
                 break;
             }
-            slots = dictSlots(db->expires);
+            slots = dictSlots(db->expires); // hash 桶的大小
             now = mstime();
 
-            /* When there are less than 1% filled slots getting random
-             * keys is expensive, so stop here waiting for better times...
+            /* When there are less than 1% filled slots getting random keys is expensive, 
+             * so stop here waiting for better times...
              * The dictionary will be resized asap. */
-            // 如果 expires 字典不为空，但是其填充率不足 1%，
-            // 字典存储的数据可能已经很少了，但是字典还是大字典，这样遍历数据有效命中率会很低,
-            // 处理起来会浪费时间, 后面的访问会很快触发字典的缩容，缩容后再进行处理效率更高, 暂时跳过这个 db
+            // 如果 expires 字典不为空，但是其填充率不足 1%，即 dict 很大，但是大部分 slot 是空的，
+            // 这种情况下遍历数据有效命中率会很低,处理起来会浪费时间, 
+            // 因此这里就不遍历了，等待后面 dict 的 resize 触发key的删除
             if (num && slots > DICT_HT_INITIAL_SIZE && (num*100/slots < 1))
                 break;
 
@@ -900,7 +912,7 @@ void activeExpireCycle(int type) {
                 if (ttl > 0) {
                     /* We want the average TTL of keys yet not expired. */
                     ttl_sum += ttl;
-                    ttl_samples++;
+                    ttl_samples++; // 尚未过期
                 }
             }
 
@@ -935,8 +947,8 @@ void activeExpireCycle(int type) {
             if (timelimit_exit) return;
             /* We don't repeat the cycle if there are less than 25% of keys
              * found expired in the current DB.
-             * 如果一轮抽样到的 key 中过期的比例小于 25%，那么这个 db 就不必再抽样了
-             * （做那么多就是为了减少 cpu 占用，减少给使用方带来的影响，因为 redis 是单线程的）
+             * 如果一轮抽到的 key 中过期比例 < 25%，那么这个 db 就不再抽样了
+             * （做那么多就是为了减少 cpu 占用，减少给使用方带来的影响）
              * */
         } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
     }
@@ -1076,14 +1088,22 @@ void clientsCron(void) {
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
 void databasesCron(void) {
-    /* Expire keys by random sampling. Not required for slaves
-     * as master will synthesize DELs for us. */
+    /* Expire keys by random sampling. 
+     * Not required for slaves as master will synthesize DELs for us. 
+
+     * 通过随机采样淘汰 key
+     * slave 不需要，因为 master 会合成 DEL 命令发过来。
+     */
     if (server.active_expire_enabled && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
 
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
-     * as will cause a lot of copy-on-write of memory pages. */
+     * as will cause a lot of copy-on-write of memory pages. 
+     * 
+     * 如果有必要，执行哈希表的 rehash，仅当没有其他进程往磁盘写数据时。
+     * 否则 rehash 会导致大量内存页的 copy-on-write。
+     * */
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
@@ -1098,6 +1118,7 @@ void databasesCron(void) {
 
         /* Resize */
         for (j = 0; j < dbs_per_call; j++) {
+            // slot 填充料不足 10%，就需要 resize
             tryResizeHashTables(resize_db % server.dbnum);
             resize_db++;
         }
@@ -1110,6 +1131,7 @@ void databasesCron(void) {
                 if (work_done) {
                     /* If the function did some work, stop here, we'll do
                      * more at the next cron loop. */
+                    // 如果这个函数做了一些事情了，那么就在这里停掉，将在下次 cron loop 做更多的事情
                     break;
                 }
             }
@@ -2305,7 +2327,8 @@ void preventCommandReplication(client *c) {
 }
 
 /* Call() is the core of Redis execution of a command.
- * call() 是 Redis 执行命令的核心
+ * call() 是 Redis 执行命令的核心函数
+ *
  * The following flags can be passed:
  * CMD_CALL_NONE             No flags.
  * CMD_CALL_SLOWLOG         Check command speed and log in the slow log if needed.
@@ -2329,16 +2352,16 @@ void preventCommandReplication(client *c) {
  *    are set, the propagation into AOF or to slaves is not performed even
  *    if the command modified the dataset.
  *
- * 不管 client 的 flags 如何指定，
- * 只要 CMD_CALL_PROPAGATE_AOF or CMD_CALL_PROPAGATE_REPL 没有被指定，传播操作将不会发生
- *
+ * 
  * Note that regardless of the client flags, if CMD_CALL_PROPAGATE_AOF
  * or CMD_CALL_PROPAGATE_REPL are not set, then respectively AOF or
  * slaves propagation will never occur.
+ * 不管 client 的 flags 如何指定，
+ * 只要 CMD_CALL_PROPAGATE_AOF or CMD_CALL_PROPAGATE_REPL 没有被指定，传播操作将不会发生
  *
- * client 的 flags 被修改的接口如下
  * Client flags are modified by the implementation of a given command
- * using the following API:
+ * using the following API: 
+ * client 的 flags 被修改的接口如下
  *
  * forceCommandPropagation(client *c, int flags);
  * preventCommandPropagation(client *c);
@@ -2364,6 +2387,7 @@ void call(client *c, int flags) {
      * demand, and initialize the array for additional commands propagation. */
      // 清除一些需要按照命令需求设置的标志，以防干扰
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
+
     // 初始化 redis 操作数组，用来追加命令的传播
     redisOpArrayInit(&server.also_propagate);
 
@@ -2385,7 +2409,7 @@ void call(client *c, int flags) {
     /* If the caller is Lua, we want to force the EVAL caller to propagate
      * the script if the command flag or client flag are forcing the
      * propagation. */
-    // 如果函数调用者是Lua脚本，且命令的 flag 或客户端的flag 指定了强制传播，我们要强制 EVAL 调用者传播脚本
+    // 如果函数调用者是 Lua 脚本，且命令的 flag 或客户端的 flag 指定了强制传播，我们要强制 EVAL 调用者传播脚本
     if (c->flags & CLIENT_LUA && server.lua_caller) {
         if (c->flags & CLIENT_FORCE_REPL)
             server.lua_caller->flags |= CLIENT_FORCE_REPL;
@@ -2434,15 +2458,15 @@ void call(client *c, int flags) {
 
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. */
-         // 如果至少设置了一种传播，则执行相应传播命令操作
         if (propagate_flags != PROPAGATE_NONE)
+            // 如果有需要，将命令传播出去 
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }
 
     /* Restore the old replication flags, since call() can be executed
      * recursively. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
-     // 恢复client原始的flags
+     // 恢复 client 原始的flags
     c->flags |= client_old_flags &
         (CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
 
@@ -2505,7 +2529,7 @@ int processCommand(client *c) {
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. 
      * 查找 command，并立即检查一些小问题，如错误的参数数量、错误的 command 名字等
-     * */
+     */
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
         flagTransaction(c);
@@ -2550,18 +2574,14 @@ int processCommand(client *c) {
         
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
                                         &hashslot,&error_code);
-
-        // 返回的节点为空，或者处理命令的节点不是我
-        if (n == NULL || n != server.cluster->myself) {
-            // 如果是执行事务的命令，则取消事务
-            if (c->cmd->proc == execCommand) {
+        
+        if (n == NULL || n != server.cluster->myself) { // 返回的节点为空，或者处理命令的节点不是我
+            if (c->cmd->proc == execCommand) {          // 如果是执行事务的命令，则取消事务
                 discardTransaction(c);
             } else {
-                 // 将事务状态设置为失败
-                flagTransaction(c);
+                flagTransaction(c);                     // 将事务状态设置为失败
             }
-            // 执行client的重定向操作
-            clusterRedirectClient(c,n,hashslot,error_code);
+            clusterRedirectClient(c,n,hashslot,error_code); // 执行client的重定向操作
             return C_OK;
         }
     }
@@ -2597,10 +2617,8 @@ int processCommand(client *c) {
         (c->cmd->flags & CMD_WRITE ||
          c->cmd->proc == pingCommand))
     {
-        // 将事务状态设置为失败
-        flagTransaction(c);
-        // 如果上一次执行AOF成功回复BGSAVE错误回复
-        if (server.aof_last_write_status == C_OK)
+        flagTransaction(c); // 将事务状态设置为失败
+        if (server.aof_last_write_status == C_OK) // 如果上一次执行AOF成功回复BGSAVE错误回复
             addReply(c, shared.bgsaveerr);
         else
             addReplySds(c,
@@ -2625,8 +2643,9 @@ int processCommand(client *c) {
     }
 
     /* Don't accept write commands if this is a read only slave. But
-     * accept write commands if this is our master. */
-    // 如果我是一个只读的从节点服务器，则不接受写命令
+     * accept write commands if this is our master. 
+     * 如果我是一个 read only 的 slave，那么不接受写命令，除非来自于我的 master
+     */
     if (server.masterhost && server.repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
         c->cmd->flags & CMD_WRITE)
@@ -2648,8 +2667,10 @@ int processCommand(client *c) {
     }
 
     /* Only allow INFO and SLAVEOF when slave-serve-stale-data is no and
-     * we are a slave with a broken link with master. */
-      // 如果是从节点且和主节点断开了连接，不允许从服务器带有过期数据，返回
+     * we are a slave with a broken link with master.
+     * 如果当前节点为 slave，主从断开连接，且 slave-serve-stale-data 配置为 no
+     * 某些不带有 CMD_STALE 标签的命令需要返回错误 -MASTERDOWN
+     */
     if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED &&
         server.repl_serve_stale_data == 0 &&
         !(c->cmd->flags & CMD_STALE))
@@ -2691,9 +2712,8 @@ int processCommand(client *c) {
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
-        call(c,CMD_CALL_FULL);
-         // 保存写全局的复制偏移量
-        c->woff = server.master_repl_offset;
+        call(c,CMD_CALL_FULL); // 执行命令
+        c->woff = server.master_repl_offset;// 保存写全局的复制偏移量
 
         // 如果有因为 BLOP 阻塞的 key 已经准备好，处理相应的 client
         if (listLength(server.ready_keys))

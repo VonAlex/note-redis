@@ -262,7 +262,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CLIENT_MASTER_FORCE_REPLY (1<<13)  /* Queue replies even if is master */
 #define CLIENT_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd. */
 #define CLIENT_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
-#define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
+#define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. 发来 sync 的 client */
 #define CLIENT_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define CLIENT_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 #define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF. */
@@ -297,10 +297,13 @@ typedef long long mstime_t; /* millisecond time type. */
                                     three: normal, slave, pubsub. */
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
- * what to do next. */
+ * what to do next. 
+ * 复制状态机
+ */
 #define REPL_STATE_NONE 0 /* No active replication */
 #define REPL_STATE_CONNECT 1 /* Must connect to master */
 #define REPL_STATE_CONNECTING 2 /* Connecting to master */
+
 /* --- Handshake states, must be ordered --- */
 #define REPL_STATE_RECEIVE_PONG 3 /* Wait for PING reply */
 #define REPL_STATE_SEND_AUTH 4 /* Send AUTH to master */
@@ -318,13 +321,20 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REPL_STATE_CONNECTED 15 /* Connected to master */
 
 /* State of slaves from the POV of the master. Used in client->replstate.
- * In SEND_BULK and ONLINE state the slave receives new updates
- * in its output queue. In the WAIT_BGSAVE states instead the server is waiting
- * to start the next background saving in order to send updates to it. */
-#define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
-#define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
-#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave. */
+ * 从 master 角度看到的 slave 状态，在 client->replstate 中使用。
+
+ * In SEND_BULK and ONLINE state the slave receives new updates in its output queue. 
+ * SEND_BULK/ONLINE 状态，slave 在它的输出队列中接收新的 updates。
+ * 
+ * In the WAIT_BGSAVE states instead the server is waiting
+ * to start the next background saving in order to send updates to it. 
+ * WAIT_BGSAVE 状态，server 正在等到开始下一次 bgsave。
+ * */
+#define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. 我们需要生成一个 rdb 文件 */
+#define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. 等待 rdb 文件创建结束 */
+#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave. 发送 rdb 文件给 slave */
 #define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
+                             /* 需要配合 repl_put_online_on_ack 变量使用 */
 
 /* Slave capabilities. */
 #define SLAVE_CAPA_NONE 0
@@ -355,7 +365,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define SUPERVISED_UPSTART 3
 
 /* Anti-warning macro... */
-// 防止编译器警告的宏
+// 未使用的变量，防止编译时报警告
 #define UNUSED(V) ((void) V)
 
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^32 elements */
@@ -593,7 +603,7 @@ typedef struct client {
     int multibulklen;       /* Number of multi bulk arguments left to read. 剩余未读的参数个数*/
     long bulklen;           /* Length of bulk argument in multi bulk request. */
     list *reply;            /* List of reply objects to send to the client. */
-    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
+    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. reply list 中 object 里 ptr 指针指向的数据占用大小 */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
     time_t ctime;           /* Client creation time. */
@@ -603,16 +613,18 @@ typedef struct client {
     int authenticated;      /* When requirepass is non-NULL. */
     int replstate;          /* Replication state if this is a slave. */
     int repl_put_online_on_ack; /* Install slave write handler on ACK. */
-    int repldbfd;           /* Replication DB file descriptor. 打开的RDB文件描述符 */
-    off_t repldboff;        /* Replication DB file offset. 已经向从节点发送的RDB数据的字节数 */
+
+    int repldbfd;           /* Replication DB file descriptor. 打开的 RDB 文件描述符 */
+    off_t repldboff;        /* Replication DB file offset. 已经向 slave 发送过的 RDB 数据的字节数 */
     off_t repldbsize;       /* Replication DB file size. RDB文件的大小 */
-    sds replpreamble;       /* Replication DB preamble. 需要发送给从节点客户端的RDB文件的长度信息 */
+    sds replpreamble;       /* Replication DB preamble. 需要发送给 slave 的 RDB 数据的长度 */
     long long reploff;      /* Replication offset if this is our master. */
+
     long long repl_ack_off; /* Replication ack offset, if this is a slave. */
-    long long repl_ack_time;/* Replication ack time, if this is a slave. */
+    long long repl_ack_time;/* Replication ack time, if this is a slave. 
+                               收到 slave 的 reconf ack 命令时更新 */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
-                                       copying this slave output buffer
-                                       should use. */
+                                       copying this slave output buffer should use. */
     char replrunid[CONFIG_RUN_ID_SIZE+1]; /* Master run id if is a master. */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char slave_ip[NET_IP_STR_LEN]; /* Optionally given by REPLCONF ip-address */
@@ -656,22 +668,23 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    robj *obj;  // 成员对象
-    double score; // 分值
-    struct zskiplistNode *backward; // 后向指针
+    robj *obj;  // 本节点元素
+    double score; // 用于存储排序的分值
+    struct zskiplistNode *backward; // 后退指针，只能指向当前节点最底层的前一个节点
 
-    // 层
+    // 柔性数组，每个节点的数组长度不一样，在生成跳表节点时随机生成
     struct zskiplistLevel {
-        struct zskiplistNode *forward; // 前向指针
+        struct zskiplistNode *forward; // 指向本层下一个节点
         unsigned int span;  // 跨度
-    } level[]; // zskiplistLevel 数组
-} zskiplistNode;
+    } level[];
+} zskiplistNode;// 跳表节点
 
+// header、tail 使得程序在 O(1) 时间内获得跳表的头部和尾部
 typedef struct zskiplist {
     struct zskiplistNode *header, *tail; // 跳表的表头节点和表尾节点
-    unsigned long length; // 跳表中节点的数量
-    int level; // 跳表中层数最大的节点层数
-} zskiplist;
+    unsigned long length; // 跳表长度 (除头节点之外，底层链表长度)
+    int level; // 跳表高度
+} zskiplist; // 跳表结构
 
 typedef struct zset {
     dict *dict;
@@ -883,6 +896,7 @@ struct redisServer {
     int syslog_enabled;             /* Is syslog enabled? */
     char *syslog_ident;             /* Syslog ident */
     int syslog_facility;            /* Syslog facility */
+    
     /* Replication (master) */
     int slaveseldb;                 /* Last SELECTed DB in replication output */
     long long master_repl_offset;   /* Global replication offset */
@@ -898,6 +912,7 @@ struct redisServer {
 
     // 最新数据的截止位置，更新的数据总是从这里开始写入到 repl_backlog 中
     // 从这里写
+    // 复制缓冲区中存储的命令请求最后一个字节索引位置
     long long repl_backlog_idx;     /* Backlog circular buffer current offset */
 
     // repl_backlog 中 idx 变量所指的位置的 offset
@@ -979,8 +994,11 @@ int repl_transfer_s;     /* Slave -> Master SYNC socket */ // 主从 tcp 通信 
     /* time cache */
     time_t unixtime;        /* Unix time sampled every cron cycle. */
     long long mstime;       /* Like 'unixtime' but with milliseconds resolution. */
+
     /* Pubsub */
+    // 普通模式收集某个 channel 都有哪些 client 订阅
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
+    // 模糊模式收集 client
     list *pubsub_patterns;  /* A list of pubsub_patterns */
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
@@ -997,7 +1015,7 @@ int repl_transfer_s;     /* Slave -> Master SYNC socket */ // 主从 tcp 通信 
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
     client *lua_client;   /* The "fake client" to query Redis from Lua */
     client *lua_caller;   /* The client running EVAL right now, or NULL */
-    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
+    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */ // 保存 lua 脚本
     mstime_t lua_time_limit;  /* Script timeout in milliseconds */
     mstime_t lua_time_start;  /* Start time of script, milliseconds time */
     int lua_write_dirty;  /* True if a write command was called during the
