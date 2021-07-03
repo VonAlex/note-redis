@@ -127,9 +127,14 @@ void freeReplicationBacklog(void) {
 }
 
 /* Add data to the replication backlog.
+ * 将 data 加到复制 backlog 中
+ * 
  * This function also increments the global replication offset stored at
  * server.master_repl_offset, because there is no case where we want to feed
- * the backlog without incrementing the buffer. */
+ * the backlog without incrementing the buffer. 
+ * 该函数也会增加全局复制漂移量 server.master_repl_offset,
+ * 因为我们不想在没有增加 buffer 的情况下去 feed backlog
+ * */
 void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
@@ -151,12 +156,12 @@ void feedReplicationBacklog(void *ptr, size_t len) {
         // 更新 idx ，指向新写入的数据之后
         server.repl_backlog_idx += thislen;
 
-        // 如果 repl_backlog 写满了，则环绕回去从 0 开始
+        // 如果 repl_backlog 写满了，则环绕回去从 0 开始（这是一个环形 buffer）
         if (server.repl_backlog_idx == server.repl_backlog_size)
             server.repl_backlog_idx = 0;
 
-        len -= thislen;
-        p += thislen;
+        len -= thislen; // 还剩下 len - thislen 这么多数据
+        p += thislen; // 已经写入 thislen 了
 
         // 更新 repl_backlog_histlen
         server.repl_backlog_histlen += thislen;
@@ -194,13 +199,16 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     char llstr[LONG_STR_SIZE];
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
-     * we can return ASAP. */
+     * we can return ASAP. 
+     * 如果没有 slave，并且没有 backlog 用来做 populate，尽快返回！
+     * */
     if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
 
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
     /* Send SELECT command to every slave if needed. */
+    // 上次选择的要同步的 db 跟这次不一样，需要加入 SELECT 命令切 db
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
 
@@ -329,7 +337,7 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
 
     serverLog(LL_DEBUG, "[PSYNC] Slave request offset: %lld", offset);
 
-    // backlog中没有数据，返回 0
+    // backlog 中没有数据，返回 0
     if (server.repl_backlog_histlen == 0) {
         serverLog(LL_DEBUG, "[PSYNC] Backlog history len is zero");
         return 0;
@@ -345,7 +353,8 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
              server.repl_backlog_idx);
 
     /* Compute the amount of bytes we need to discard. */
-    // 计算需要跳过的数据长度
+    // slave 要的数据从 offset 开始，但是环形 buffer 里现在数据从 repl_backlog_off 开始，
+    // 所以需要舍弃一部分
     skip = offset - server.repl_backlog_off;
     serverLog(LL_DEBUG, "[PSYNC] Skipping: %lld", skip);
 
@@ -369,7 +378,10 @@ long long addReplyReplicationBacklog(client *c, long long offset) {
     j = (j + skip) % server.repl_backlog_size;
 
     /* Feed slave with data. Since it is a circular buffer we have to
-     * split the reply in two parts if we are cross-boundary. */
+     * split the reply in two parts if we are cross-boundary. 
+     * 一共有 repl_backlog_histlen 长度的数据，舍弃了 skip
+     * 剩下的 len 长度的数据，需要发送给 slave
+     * */
     len = server.repl_backlog_histlen - skip;
     serverLog(LL_DEBUG, "[PSYNC] Reply total length: %lld", len);
     while(len) {

@@ -91,18 +91,20 @@ sds sdsnewlen(const void *init, size_t initlen) {
     char type = sdsReqType(initlen); // 判断需要以哪种类型的 sds 来存储 init内容，不同类型的 sds，header 不一样
     /* Empty strings are usually created in order to append. Use type 8
      * since type 5 is not good at this. */
+    // 空字符串一般用来做 append，使用 type 8 代替 type 5，减少不必要的 sds 扩容
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
     int hdrlen = sdsHdrSize(type); // sds 相应 header 类型的长度
-    unsigned char *fp; /* flag 指针*/
+    unsigned char *fp;
 
-    sh = s_malloc(hdrlen+initlen+1);// 分配内存， header + 字符串 + 1，字符串以\0 结尾
-    if (!init)
-        memset(sh, 0, hdrlen+initlen+1); // 以0来初始化分配到的内存
-    if (sh == NULL) return NULL; // 分配内存失败
+    sh = s_malloc(hdrlen+initlen+1);// header + 字符串 + 1
+    if (!init) // 新字符串需要初始化内存
+        memset(sh, 0, hdrlen+initlen+1);
+    if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen; // s 指向 buf
-    fp = ((unsigned char*)s)-1; // flag 指针
-    switch(type) { // 设置 sds 的 header 各参数
+    fp = ((unsigned char*)s)-1; // fp 指向 flag
+    switch(type) {
         case SDS_TYPE_5: {
+            // 低 3 位存 type，高 5 位存 len
             *fp = type | (initlen << SDS_TYPE_BITS);
             break;
         }
@@ -210,7 +212,7 @@ void sdsclear(sds s) {
 // 动态调整 sds 的 buf
 sds sdsMakeRoomFor(sds s, size_t addlen) {
     void *sh, *newsh;
-    size_t avail = sdsavail(s); // 当前 sds 剩余空间
+    size_t avail = sdsavail(s); // 当前 sds 剩余长度
     size_t len, newlen;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
@@ -755,6 +757,7 @@ sds sdstrim(sds s, const char *cset) {
  * s = sdsnew("Hello World");
  * sdsrange(s,1,-1); => "ello World"
  */
+// 原地修改原 sds
 void sdsrange(sds s, int start, int end) {
     size_t newlen, len = sdslen(s);
 

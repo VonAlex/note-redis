@@ -2231,6 +2231,7 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 
 /* Propagate the specified command (in the context of the specified database id)
  * to AOF and Slaves.
+ * 传播特定的命令给 AOF 和 slave。
  *
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
@@ -2239,11 +2240,12 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
  *
  * This should not be used inside commands implementation. Use instead
  * alsoPropagate(), preventCommandPropagation(), forceCommandPropagation().
+ * 这不应该在命令的实现中使用。
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
-    if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
+    if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF) // 开了 aof，并且需要做同步
         feedAppendOnlyFile(cmd,dbid,argv,argc);
     if (flags & PROPAGATE_REPL)
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
